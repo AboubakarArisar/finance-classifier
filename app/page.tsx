@@ -6,7 +6,9 @@ type UploadKey = "creditFile" | "bankFile";
 
 type AnalyzeResponse = {
   downloadUrl: string;
+  fileName: string;
   jobId: string;
+  reportBase64: string;
   rowCount: number;
 };
 
@@ -104,6 +106,24 @@ export default function Home() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function downloadReport() {
+    if (!result) {
+      return;
+    }
+
+    const binary = window.atob(result.reportBase64);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const blob = new Blob([bytes], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = result.fileName;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -211,12 +231,13 @@ export default function Home() {
               </p>
 
               {result ? (
-                <a
+                <button
                   className="mt-5 inline-flex h-11 items-center justify-center bg-[#477061] px-5 text-sm font-semibold text-white transition hover:bg-[#36584b]"
-                  href={result.downloadUrl}
+                  onClick={downloadReport}
+                  type="button"
                 >
                   הורד דוח Excel
-                </a>
+                </button>
               ) : null}
             </section>
           </form>

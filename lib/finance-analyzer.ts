@@ -15,7 +15,9 @@ export type UploadedWorkbook = {
 
 export type AnalyzeResult = {
   downloadUrl: string;
+  fileName: string;
   jobId: string;
+  reportBase64: string;
   rowCount: number;
 };
 
@@ -111,11 +113,15 @@ export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Pro
   }
 
   const classifiedRows = transactions.map((transaction) => classifyTransaction(transaction, mappings));
-  await writeFile(path.join(jobDir, "report.xlsx"), buildReportWorkbook(classifiedRows));
+  const reportBuffer = buildReportWorkbook(classifiedRows);
+  const fileName = `classified-transactions-${jobId}.xlsx`;
+  await writeFile(path.join(jobDir, "report.xlsx"), reportBuffer);
 
   return {
     downloadUrl: `/api/reports/${jobId}`,
+    fileName,
     jobId,
+    reportBase64: reportBuffer.toString("base64"),
     rowCount: classifiedRows.length,
   };
 }
