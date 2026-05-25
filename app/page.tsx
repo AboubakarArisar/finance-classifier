@@ -10,14 +10,16 @@ type AnalyzeResponse = {
   rowCount: number;
 };
 
+const maxFilesPerGroup = 6;
+
 const uploadCards: Record<UploadKey, { description: string; label: string; step: string }> = {
   creditFile: {
-    description: "קובץ Excel בלבד, עבור ששת החודשים המלאים האחרונים וללא פרטי כרטיס מלאים.",
+    description: "ניתן לבחור 1 עד 6 קבצי Excel, קובץ אחד לכל חודש, ללא פרטי כרטיס מלאים.",
     label: "פירוט כרטיסי אשראי",
     step: "שלב 1",
   },
   bankFile: {
-    description: "קובץ Excel של תנועות חשבון הבנק עבור ששת החודשים האחרונים.",
+    description: "ניתן לבחור 1 עד 6 קבצי Excel של חשבון הבנק, קובץ אחד לכל חודש.",
     label: "פירוט חשבון בנק",
     step: "שלב 2",
   },
@@ -29,47 +31,57 @@ function isExcelFile(file: File) {
 }
 
 export default function Home() {
-  const [files, setFiles] = useState<Record<UploadKey, File | null>>({
-    bankFile: null,
-    creditFile: null,
+  const [files, setFiles] = useState<Record<UploadKey, File[]>>({
+    bankFile: [],
+    creditFile: [],
   });
   const [error, setError] = useState("");
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const canSubmit = useMemo(() => Boolean(files.creditFile && files.bankFile), [files]);
+  const canSubmit = useMemo(
+    () => files.creditFile.length > 0 && files.bankFile.length > 0,
+    [files],
+  );
 
   function handleFileChange(key: UploadKey, event: ChangeEvent<HTMLInputElement>) {
-    const nextFile = event.target.files?.[0] ?? null;
+    const selectedFiles = Array.from(event.target.files ?? []);
     setResult(null);
 
-    if (!nextFile) {
-      setFiles((current) => ({ ...current, [key]: null }));
+    if (selectedFiles.length === 0) {
+      setFiles((current) => ({ ...current, [key]: [] }));
       return;
     }
 
-    if (!isExcelFile(nextFile)) {
+    if (selectedFiles.length > maxFilesPerGroup) {
+      event.target.value = "";
+      setError("ניתן להעלות עד 6 קבצי Excel בכל קטגוריה.");
+      setFiles((current) => ({ ...current, [key]: [] }));
+      return;
+    }
+
+    if (selectedFiles.some((file) => !isExcelFile(file))) {
       event.target.value = "";
       setError("ניתן להעלות קבצי Excel בלבד: XLS, XLSX או XLSM.");
-      setFiles((current) => ({ ...current, [key]: null }));
+      setFiles((current) => ({ ...current, [key]: [] }));
       return;
     }
 
     setError("");
-    setFiles((current) => ({ ...current, [key]: nextFile }));
+    setFiles((current) => ({ ...current, [key]: selectedFiles }));
   }
 
   async function submitFiles(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!files.creditFile || !files.bankFile) {
-      setError("יש להעלות גם קובץ כרטיסי אשראי וגם קובץ חשבון בנק.");
+    if (!canSubmit) {
+      setError("יש להעלות לפחות קובץ אחד של כרטיסי אשראי ולפחות קובץ אחד של חשבון בנק.");
       return;
     }
 
     const formData = new FormData();
-    formData.append("creditFile", files.creditFile);
-    formData.append("bankFile", files.bankFile);
+    files.creditFile.forEach((file) => formData.append("creditFile", file));
+    files.bankFile.forEach((file) => formData.append("bankFile", file));
 
     setError("");
     setResult(null);
@@ -104,11 +116,11 @@ export default function Home() {
               סיווג פעולות פיננסיות מקבצי Excel
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-[#59645e]">
-              העלו דפי כרטיס אשראי וחשבון בנק, והמערכת תחזיר קובץ Excel מסווג להורדה.
+              העלו עד שישה חודשי בנק ועד שישה חודשי כרטיסי אשראי. המערכת תחזיר קובץ Excel מסווג להורדה.
             </p>
           </div>
           <span className="inline-flex h-11 items-center border border-[#aeb7ae] bg-white px-4 text-sm font-semibold text-[#33443d]">
-            שמירת קבצים ל-30 יום
+            קובץ אחד לכל חודש
           </span>
         </header>
 
@@ -118,17 +130,17 @@ export default function Home() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold text-[#477061]">העלאת קבצים</p>
-                  <h2 className="mt-1 text-2xl font-semibold">בחרו את שני קבצי ה-Excel</h2>
+                  <h2 className="mt-1 text-2xl font-semibold">בחרו את קבצי החודשים</h2>
                 </div>
                 <span className="border border-[#d7d6cc] px-3 py-1 text-xs font-semibold text-[#477061]">
-                  XLS / XLSX / XLSM
+                  עד 6 לכל סוג
                 </span>
               </div>
 
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 {(Object.keys(uploadCards) as UploadKey[]).map((key) => (
                   <label
-                    className="flex min-h-52 cursor-pointer flex-col justify-between border border-dashed border-[#b6beb4] bg-[#fbfaf6] p-5 transition hover:border-[#477061] hover:bg-white"
+                    className="flex min-h-56 cursor-pointer flex-col justify-between border border-dashed border-[#b6beb4] bg-[#fbfaf6] p-5 transition hover:border-[#477061] hover:bg-white"
                     key={key}
                   >
                     <span>
@@ -142,13 +154,23 @@ export default function Home() {
                       <input
                         accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         className="sr-only"
+                        multiple
                         name={key}
                         onChange={(event) => handleFileChange(key, event)}
                         type="file"
                       />
                       <span className="inline-flex min-h-11 w-full items-center justify-center border border-[#1d2521] px-4 text-center text-sm font-semibold">
-                        {files[key]?.name ?? "בחירת קובץ"}
+                        {files[key].length > 0 ? `נבחרו ${files[key].length} קבצים` : "בחירת קבצים"}
                       </span>
+                      {files[key].length > 0 ? (
+                        <span className="mt-3 grid gap-1 text-xs leading-5 text-[#59645e]">
+                          {files[key].map((file) => (
+                            <span className="truncate" key={`${key}-${file.name}`}>
+                              {file.name}
+                            </span>
+                          ))}
+                        </span>
+                      ) : null}
                     </span>
                   </label>
                 ))}
@@ -201,15 +223,10 @@ export default function Home() {
 
           <aside className="border border-[#d7d6cc] bg-white p-5 shadow-sm">
             <p className="text-sm font-semibold text-[#477061]">איך זה עובד</p>
-            <h2 className="mt-1 text-2xl font-semibold">תהליך עיבוד מאובטח</h2>
+            <h2 className="mt-1 text-2xl font-semibold">תהליך עיבוד</h2>
             <div className="mt-5 grid gap-4 text-sm leading-7 text-[#59645e]">
-              <p>
-                המערכת שומרת את קבצי המקור והדוח שנוצר למשך 30 יום, ולא מציגה רשימת דוחות או קבצים קודמים למבקרים
-                באתר.
-              </p>
-              <p>
-                הסיווג מבוסס על קובץ מיפוי פנימי בשם category-mapping.xlsx, עם עמודות keyword, category ו-status.
-              </p>
+              <p>כל לקוח יכול להעלות עד 6 קבצי בנק ועד 6 קבצי כרטיסי אשראי, כאשר כל קובץ מייצג חודש אחד.</p>
+              <p>הסיווג מבוסס על קובץ מיפוי פנימי בשם category-mapping.xlsx, עם עמודות keyword, category ו-status.</p>
               <p>פעולות שלא נמצאה עבורן מילת מפתח מסומנות אוטומטית כלא מסווגות ונשלחות לבדיקה.</p>
             </div>
 

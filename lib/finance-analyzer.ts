@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
+import os from "os";
 import path from "path";
 import * as XLSX from "xlsx";
 
@@ -36,8 +37,8 @@ type ClassifiedTransaction = NormalizedTransaction & {
   status: string;
 };
 
-const jobsDir = path.join(process.cwd(), ".data", "jobs");
-const mappingPath = path.join(process.cwd(), "data", "category-mapping.xlsx");
+const jobsDir = getJobsDir();
+const mappingPath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "category-mapping.xlsx");
 const retentionMs = 30 * 24 * 60 * 60 * 1000;
 const excelExtensions = [".xls", ".xlsx", ".xlsm"];
 
@@ -78,6 +79,17 @@ export function isExcelFileName(fileName: string) {
   return excelExtensions.includes(path.extname(fileName).toLowerCase());
 }
 
+function getJobsDir() {
+  if (process.env.FINANCE_DATA_DIR) {
+    return path.join(process.env.FINANCE_DATA_DIR, "jobs");
+  }
+
+  const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.WEBSITE_INSTANCE_ID);
+  return isServerless
+    ? path.join(/*turbopackIgnore: true*/ os.tmpdir(), "benny-finance-classifier", "jobs")
+    : path.join(/*turbopackIgnore: true*/ process.cwd(), ".data", "jobs");
+}
+
 export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Promise<AnalyzeResult> {
   await mkdir(jobsDir, { recursive: true });
   await cleanupExpiredJobs();
@@ -113,10 +125,9 @@ export async function readReport(jobId: string) {
     return null;
   }
 
-  const reportPath = path.resolve(jobsDir, jobId, "report.xlsx");
-  const resolvedJobsDir = path.resolve(jobsDir);
+  const reportPath = path.join(jobsDir, jobId, "report.xlsx");
 
-  if (!reportPath.startsWith(resolvedJobsDir) || !existsSync(reportPath)) {
+  if (!existsSync(reportPath)) {
     return null;
   }
 
