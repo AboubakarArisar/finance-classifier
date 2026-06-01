@@ -63,6 +63,7 @@ type NormalizedTransaction = {
 
 const jobsDir = getJobsDir();
 const mappingPath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "category-mapping.xlsx");
+const shamirTemplatePath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "shamir-template.xlsx");
 const retentionMs = 30 * 24 * 60 * 60 * 1000;
 const excelExtensions = [".xls", ".xlsx", ".xlsm"];
 
@@ -513,6 +514,11 @@ function classifyBySourceCategory(sourceCategory: string) {
 
 async function buildReportWorkbook(transactions: NormalizedTransaction[], summaries: ParsedSheetSummary[]) {
   const sortedTransactions = transactions.slice().sort((left, right) => compareDateText(left.date, right.date));
+
+  if (existsSync(shamirTemplatePath)) {
+    return buildTemplateReportWorkbook(sortedTransactions, summaries);
+  }
+
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Finance Classifier";
   workbook.created = new Date();
@@ -526,6 +532,147 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
+}
+
+async function buildTemplateReportWorkbook(
+  transactions: NormalizedTransaction[],
+  summaries: ParsedSheetSummary[],
+) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(shamirTemplatePath);
+  workbook.creator = "Finance Classifier";
+  workbook.modified = new Date();
+  workbook.calcProperties.fullCalcOnLoad = true;
+  workbook.views = [{ activeTab: 2, firstSheet: 0, height: 12000, visibility: "visible", width: 20000, x: 0, y: 0 }];
+  clearUnsupportedTemplateFormatting(workbook);
+
+  removeTemplateSourceSheets(workbook);
+  fillTemplateSummarySheet(workbook, summaries);
+  fillTemplateClassificationSheet(workbook, transactions);
+  fillTemplateImportSheet(workbook, transactions);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+function clearUnsupportedTemplateFormatting(workbook: ExcelJS.Workbook) {
+  workbook.worksheets.forEach((sheet) => {
+    (sheet as ExcelJS.Worksheet & { conditionalFormattings: unknown[] }).conditionalFormattings = [];
+  });
+}
+
+function removeTemplateSourceSheets(workbook: ExcelJS.Workbook) {
+  workbook.worksheets
+    .filter((sheet) => /^(אשראי|בנק)-\d+$/.test(sheet.name))
+    .forEach((sheet) => workbook.removeWorksheet(sheet.id));
+}
+
+function fillTemplateSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSheetSummary[]) {
+  const sheet = workbook.getWorksheet("שמיר");
+
+  if (!sheet) {
+    return;
+  }
+
+  sheet.getCell("A1").value = "נוצר באמצעות Finance Classifier";
+  sheet.getCell("B1").value = new Date().toLocaleDateString("he-IL");
+
+  for (let rowNumber = 3; rowNumber <= Math.max(sheet.rowCount, summaries.length + 2); rowNumber += 1) {
+    for (let columnNumber = 1; columnNumber <= 7; columnNumber += 1) {
+      sheet.getCell(rowNumber, columnNumber).value = null;
+    }
+  }
+
+  summaries.forEach((summary, index) => {
+    const row = sheet.getRow(index + 3);
+    row.getCell(1).value = summary.originalFileName;
+    row.getCell(2).value = summary.originalSheetName;
+    row.getCell(3).value = summary.sourceName;
+    row.getCell(4).value = summary.transactionCount;
+    row.getCell(5).value = summary.totalAmount;
+    row.getCell(6).value = summary.maxDate;
+    row.getCell(7).value = summary.minDate;
+  });
+}
+
+function fillTemplateClassificationSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+  const sheet = workbook.getWorksheet("שלב ב - סיווג תנועות");
+
+  if (!sheet) {
+    appendExcelClassificationSheet(workbook, transactions);
+    return;
+  }
+
+  const lastTemplateRow = Math.max(sheet.rowCount, 1499);
+  const lastOutputRow = transactions.length + 8;
+  const monthCount = Math.max(1, countDistinctMonths(transactions));
+
+  sheet.getCell("B2").value = monthCount;
+  sheet.getCell("B3").value = { formula: "'שלב ג - תוצאות השיקוף'!B2" };
+  sheet.getCell("B4").value = { formula: "'שלב ג - תוצאות השיקוף'!E2" };
+  sheet.getCell("B5").value = { formula: "(B4-B3)" };
+
+  for (let rowNumber = 9; rowNumber <= lastTemplateRow; rowNumber += 1) {
+    for (let columnNumber = 1; columnNumber <= 16; columnNumber += 1) {
+      sheet.getCell(rowNumber, columnNumber).value = null;
+    }
+  }
+
+  transactions.forEach((transaction, index) => {
+    const rowNumber = index + 9;
+    const values = [
+      transaction.sourceName,
+      transaction.date,
+      transaction.description,
+      transaction.direction === "הוצאה" ? transaction.amount : -transaction.amount,
+      transaction.direction,
+      transaction.recurrence,
+      transaction.mainCategory,
+      transaction.subCategory,
+      transaction.note,
+      transaction.originalAmount,
+      transaction.chargeCurrency,
+      transaction.cardOrAccount,
+      "",
+      { formula: `IF(OR(F${rowNumber}=$P$1,F${rowNumber}="",F${rowNumber}=0),D${rowNumber}/$B$2,IF(OR(F${rowNumber}=$P$2,F${rowNumber}=$P$3,F${rowNumber}=$P$4),D${rowNumber}/(O${rowNumber}*P${rowNumber}),D${rowNumber}/O${rowNumber}))` },
+      { formula: `IFERROR(VLOOKUP(F${rowNumber},$P$1:$Q$4,2,0),F${rowNumber})` },
+      { formula: `IF(C${rowNumber}="",1,COUNTIFS($C$9:$C$1499,C${rowNumber},$H$9:$H$1499,H${rowNumber}))` },
+    ];
+
+    values.forEach((value, columnIndex) => {
+      sheet.getCell(rowNumber, columnIndex + 1).value = value;
+    });
+  });
+
+  sheet.autoFilter = {
+    from: "A8",
+    to: `P${lastOutputRow}`,
+  };
+}
+
+function fillTemplateImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+  const sheet = workbook.getWorksheet("ליבוא מהתוכנה");
+
+  if (!sheet) {
+    return;
+  }
+
+  for (let rowNumber = 3; rowNumber <= Math.max(sheet.rowCount, transactions.length + 2); rowNumber += 1) {
+    for (let columnNumber = 1; columnNumber <= 7; columnNumber += 1) {
+      sheet.getCell(rowNumber, columnNumber).value = null;
+    }
+  }
+
+  transactions.forEach((transaction, index) => {
+    const row = sheet.getRow(index + 3);
+    row.getCell(1).value = transaction.date;
+    row.getCell(2).value = transaction.description;
+    row.getCell(3).value = transaction.direction === "הוצאה" ? transaction.amount : -transaction.amount;
+    row.getCell(4).value = transaction.direction;
+    row.getCell(5).value = transaction.mainCategory;
+    row.getCell(6).value = transaction.subCategory;
+    row.getCell(7).value = transaction.note;
+  });
 }
 
 function appendExcelSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSheetSummary[]) {
