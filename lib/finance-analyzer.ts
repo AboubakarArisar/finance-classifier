@@ -273,10 +273,11 @@ function parseWorkbook(
       header: 1,
       raw: false,
     });
+    const creditParsed = parseCreditSheet(rows, sheetName, file, mappings, () => getNextSourceName("credit"));
     const parsed =
-      file.kind === "credit"
-        ? parseCreditSheet(rows, sheetName, file, mappings, () => getNextSourceName(file.kind))
-        : parseBankSheet(rows, sheetName, file, mappings, () => getNextSourceName(file.kind));
+      creditParsed.transactions.length > 0
+        ? creditParsed
+        : parseBankSheet(rows, sheetName, file, mappings, () => getNextSourceName("bank"));
 
     if (parsed.transactions.length === 0) {
       return;
@@ -514,26 +515,12 @@ function buildReportWorkbook(transactions: NormalizedTransaction[], summaries: P
   workbook.Workbook = { Views: [{ RTL: true }] };
 
   const sortedTransactions = transactions.slice().sort((left, right) => compareDateText(left.date, right.date));
-  appendInstructionsSheet(workbook);
-  appendSummarySheet(workbook, summaries);
   appendClassificationSheet(workbook, sortedTransactions);
+  appendSummarySheet(workbook, summaries);
   appendCategorySheet(workbook);
   appendImportSheet(workbook, sortedTransactions);
 
   return XLSX.write(workbook, { bookType: "xlsx", type: "buffer" }) as Buffer;
-}
-
-function appendInstructionsSheet(workbook: XLSX.WorkBook) {
-  const rows = [
-    ["שמיר - כלי לשיקוף מהיר על בסיס פירוט פעולות בנק וכרטיס אשראי"],
-    [""],
-    ["הקובץ נוצר אוטומטית על ידי מערכת הסיווג."],
-    ["עברו לגיליון 'שלב ב - סיווג תנועות' ובדקו פעולות שלא סווגו."],
-  ];
-  const sheet = XLSX.utils.aoa_to_sheet(rows);
-  sheet["!rtl"] = true;
-  sheet["!cols"] = [{ wch: 80 }];
-  XLSX.utils.book_append_sheet(workbook, sheet, "הדרכה");
 }
 
 function appendSummarySheet(workbook: XLSX.WorkBook, summaries: ParsedSheetSummary[]) {
