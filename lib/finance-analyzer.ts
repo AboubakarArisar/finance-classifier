@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
+import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
 
 export type UploadKind = "credit" | "bank";
@@ -180,7 +181,7 @@ export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Pro
     throw new Error("לא נמצאו תנועות בקבצים שהועלו. יש לבדוק שהקבצים כוללים טבלת פעולות.");
   }
 
-  const reportBuffer = buildReportWorkbook(transactions, sheetSummaries);
+  const reportBuffer = await buildReportWorkbook(transactions, sheetSummaries);
   const fileName = `shamir-classified-${jobId}.xlsx`;
   await writeFile(path.join(jobDir, "report.xlsx"), reportBuffer);
 
@@ -510,21 +511,28 @@ function classifyBySourceCategory(sourceCategory: string) {
   return null;
 }
 
-function buildReportWorkbook(transactions: NormalizedTransaction[], summaries: ParsedSheetSummary[]) {
-  const workbook = XLSX.utils.book_new();
-  workbook.Workbook = { Views: [{ RTL: true }] };
-
+async function buildReportWorkbook(transactions: NormalizedTransaction[], summaries: ParsedSheetSummary[]) {
   const sortedTransactions = transactions.slice().sort((left, right) => compareDateText(left.date, right.date));
-  appendClassificationSheet(workbook, sortedTransactions);
-  appendSummarySheet(workbook, summaries);
-  appendCategorySheet(workbook);
-  appendImportSheet(workbook, sortedTransactions);
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Finance Classifier";
+  workbook.created = new Date();
+  workbook.views = [{ activeTab: 0, firstSheet: 0, height: 12000, visibility: "visible", width: 20000, x: 0, y: 0 }];
 
-  return XLSX.write(workbook, { bookType: "xlsx", type: "buffer" }) as Buffer;
+  appendExcelClassificationSheet(workbook, sortedTransactions);
+  appendExcelSummarySheet(workbook, summaries);
+  appendExcelCategorySheet(workbook);
+  appendExcelImportSheet(workbook, sortedTransactions);
+  appendExcelChoicesSheet(workbook);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
-function appendSummarySheet(workbook: XLSX.WorkBook, summaries: ParsedSheetSummary[]) {
-  const rows = [
+function appendExcelSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSheetSummary[]) {
+  const sheet = workbook.addWorksheet("שמיר", {
+    views: [{ rightToLeft: true }],
+  });
+  sheet.addRows([
     ["נוצר באמצעות Finance Classifier", new Date().toLocaleDateString("he-IL")],
     ["שם קובץ מקורי", "שם לשונית מקורי", "שם לשונית חדש", "מספר רשומות", "סכום כולל", "תאריך מאוחר", "תאריך מוקדם"],
     ...summaries.map((summary, index) => [
@@ -536,21 +544,33 @@ function appendSummarySheet(workbook: XLSX.WorkBook, summaries: ParsedSheetSumma
       summary.maxDate,
       summary.minDate,
     ]),
+  ]);
+  sheet.columns = [
+    { width: 34 },
+    { width: 26 },
+    { width: 15 },
+    { width: 14 },
+    { width: 14 },
+    { width: 14 },
+    { width: 14 },
   ];
-  const sheet = XLSX.utils.aoa_to_sheet(rows);
-  sheet["!rtl"] = true;
-  sheet["!cols"] = [{ wch: 32 }, { wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
-  XLSX.utils.book_append_sheet(workbook, sheet, "שמיר");
+  styleHeaderRow(sheet.getRow(2));
 }
 
-function appendClassificationSheet(workbook: XLSX.WorkBook, transactions: NormalizedTransaction[]) {
-  const rows = [
+function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+  const sheet = workbook.addWorksheet("שלב ב - סיווג תנועות", {
+    views: [{ rightToLeft: true, state: "frozen", ySplit: 8 }],
+  });
+  const lastRow = transactions.length + 8;
+  const monthCount = Math.max(1, countDistinctMonths(transactions));
+
+  sheet.addRows([
     ["שם המשפחה", "ישראלי"],
-    ["תקופת השיקוף", ""],
-    ["ממוצע הוצאות בחודש", ""],
-    ["ממוצע הכנסות בחודש", ""],
-    ["מאזן חודשי", ""],
-    ["שימו לב! אין לשנות את סדר התנועות או את מיקומן."],
+    ["תקופת השיקוף", monthCount],
+    ["ממוצע הוצאות בחודש", { formula: `IFERROR(SUMIF(E9:E${lastRow},"הוצאה",D9:D${lastRow})/B2,0)` }],
+    ["ממוצע הכנסות בחודש", { formula: `IFERROR(ABS(SUMIF(E9:E${lastRow},"הכנסה",D9:D${lastRow}))/B2,0)` }],
+    ["מאזן חודשי", { formula: "B4-B3" }],
+    ["שימו לב! ניתן לבחור ולתקן סעיף ראשי, שם סעיף והוצאה/הכנסה בעזרת הרשימות הנפתחות."],
     ["תנועות מתוך דפי בנק וכרטיסי אשראי"],
     classificationHeaders,
     ...transactions.map((transaction) => [
@@ -571,40 +591,77 @@ function appendClassificationSheet(workbook: XLSX.WorkBook, transactions: Normal
       "",
       "1",
     ]),
+  ]);
+
+  sheet.columns = [
+    { width: 14 },
+    { width: 12 },
+    { width: 34 },
+    { width: 14 },
+    { width: 16 },
+    { width: 18 },
+    { width: 24 },
+    { width: 28 },
+    { width: 34 },
+    { width: 14 },
+    { width: 12 },
+    { width: 16 },
+    { width: 4 },
+    { width: 20 },
+    { width: 20 },
+    { width: 20 },
   ];
-  const sheet = XLSX.utils.aoa_to_sheet(rows);
-  sheet["!rtl"] = true;
-  sheet["!cols"] = [
-    { wch: 14 },
-    { wch: 12 },
-    { wch: 34 },
-    { wch: 14 },
-    { wch: 16 },
-    { wch: 18 },
-    { wch: 24 },
-    { wch: 28 },
-    { wch: 34 },
-    { wch: 14 },
-    { wch: 12 },
-    { wch: 16 },
-    { wch: 4 },
-    { wch: 20 },
-    { wch: 20 },
-    { wch: 20 },
-  ];
-  sheet["!autofilter"] = { ref: `A8:P${rows.length}` };
-  XLSX.utils.book_append_sheet(workbook, sheet, "שלב ב - סיווג תנועות");
+  sheet.autoFilter = `A8:P${lastRow}`;
+  styleHeaderRow(sheet.getRow(8));
+  ["B3", "B4", "B5"].forEach((cellAddress) => {
+    sheet.getCell(cellAddress).numFmt = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
+    sheet.getCell(cellAddress).font = { bold: true };
+  });
+  sheet.getCell("A5").font = { bold: true };
+  sheet.getCell("B5").fill = { fgColor: { argb: "FFEFEFEA" }, pattern: "solid", type: "pattern" };
+
+  for (let rowNumber = 9; rowNumber <= lastRow; rowNumber += 1) {
+    sheet.getCell(`D${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00';
+    sheet.getCell(`E${rowNumber}`).dataValidation = {
+      allowBlank: false,
+      formulae: ["בחירות!$C$2:$C$3"],
+      showErrorMessage: true,
+      type: "list",
+    };
+    sheet.getCell(`F${rowNumber}`).dataValidation = {
+      allowBlank: true,
+      formulae: ["בחירות!$D$2:$D$6"],
+      type: "list",
+    };
+    sheet.getCell(`G${rowNumber}`).dataValidation = {
+      allowBlank: true,
+      formulae: ["בחירות!$A$2:$A$20"],
+      showErrorMessage: true,
+      type: "list",
+    };
+    sheet.getCell(`H${rowNumber}`).dataValidation = {
+      allowBlank: true,
+      formulae: ["בחירות!$B$2:$B$80"],
+      showErrorMessage: true,
+      type: "list",
+    };
+  }
 }
 
-function appendCategorySheet(workbook: XLSX.WorkBook) {
-  const sheet = XLSX.utils.aoa_to_sheet(categorySheetRows);
-  sheet["!rtl"] = true;
-  sheet["!cols"] = categorySheetRows[0].map(() => ({ wch: 22 }));
-  XLSX.utils.book_append_sheet(workbook, sheet, "רשימת הסעיפים");
+function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
+  const sheet = workbook.addWorksheet("רשימת הסעיפים", {
+    views: [{ rightToLeft: true }],
+  });
+  sheet.addRows(categorySheetRows);
+  sheet.columns = categorySheetRows[0].map(() => ({ width: 22 }));
+  styleHeaderRow(sheet.getRow(1));
 }
 
-function appendImportSheet(workbook: XLSX.WorkBook, transactions: NormalizedTransaction[]) {
-  const rows = [
+function appendExcelImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+  const sheet = workbook.addWorksheet("ליבוא מהתוכנה", {
+    views: [{ rightToLeft: true }],
+  });
+  sheet.addRows([
     ["[אין למחוק או לערוך גיליון זה]", "", "", "", "", "", "", "", "מוכן ליבוא"],
     ["תאריך", "תיאור", "סכום", "הוצאה/הכנסה", "סעיף ראשי", "שם סעיף", "הערות"],
     ...transactions.map((transaction) => [
@@ -616,11 +673,56 @@ function appendImportSheet(workbook: XLSX.WorkBook, transactions: NormalizedTran
       transaction.subCategory,
       transaction.note,
     ]),
-  ];
-  const sheet = XLSX.utils.aoa_to_sheet(rows);
-  sheet["!rtl"] = true;
-  sheet["!cols"] = [{ wch: 12 }, { wch: 36 }, { wch: 14 }, { wch: 14 }, { wch: 24 }, { wch: 28 }, { wch: 40 }];
-  XLSX.utils.book_append_sheet(workbook, sheet, "ליבוא מהתוכנה");
+  ]);
+  sheet.columns = [{ width: 12 }, { width: 36 }, { width: 14 }, { width: 14 }, { width: 24 }, { width: 28 }, { width: 40 }];
+  styleHeaderRow(sheet.getRow(2));
+}
+
+function appendExcelChoicesSheet(workbook: ExcelJS.Workbook) {
+  const sheet = workbook.addWorksheet("בחירות", {
+    state: "veryHidden",
+    views: [{ rightToLeft: true }],
+  });
+  const mainCategories = categorySheetRows[0].filter(Boolean);
+  const subCategories = [...new Set(categorySheetRows.slice(1).flat().filter(Boolean))];
+  const directions = ["הוצאה", "הכנסה"];
+  const recurrences = ["", "חודשי/מזדמן", "שנתי", "דו-חודשי", "רבעוני", "חלוקת הסכום ב X"];
+  const maxRows = Math.max(mainCategories.length, subCategories.length, directions.length, recurrences.length);
+
+  sheet.addRow(["סעיף ראשי", "שם סעיף", "הוצאה/הכנסה", "מחזוריות"]);
+
+  for (let index = 0; index < maxRows; index += 1) {
+    sheet.addRow([
+      mainCategories[index] ?? "",
+      subCategories[index] ?? "",
+      directions[index] ?? "",
+      recurrences[index] ?? "",
+    ]);
+  }
+}
+
+function styleHeaderRow(row: ExcelJS.Row) {
+  row.font = { bold: true };
+  row.fill = { fgColor: { argb: "FFEFEFEA" }, pattern: "solid", type: "pattern" };
+  row.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  row.eachCell((cell) => {
+    cell.border = {
+      bottom: { color: { argb: "FFD8D4C8" }, style: "thin" },
+      left: { color: { argb: "FFD8D4C8" }, style: "thin" },
+      right: { color: { argb: "FFD8D4C8" }, style: "thin" },
+      top: { color: { argb: "FFD8D4C8" }, style: "thin" },
+    };
+  });
+}
+
+function countDistinctMonths(transactions: NormalizedTransaction[]) {
+  const months = new Set(
+    transactions
+      .map((transaction) => transaction.date.match(/^\d{2}\/(\d{2})\/(\d{4})$/))
+      .filter((match): match is RegExpMatchArray => Boolean(match))
+      .map((match) => `${match[2]}-${match[1]}`),
+  );
+  return months.size;
 }
 
 function findHeaderRowIndex(rows: unknown[][], requiredHeaders: string[]) {
