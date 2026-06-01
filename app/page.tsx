@@ -40,6 +40,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formVersion, setFormVersion] = useState(0);
 
   const canSubmit = useMemo(
     () => files.creditFile.length > 0 && files.bankFile.length > 0,
@@ -124,6 +125,18 @@ export default function Home() {
     link.download = result.fileName;
     link.click();
     URL.revokeObjectURL(url);
+    resetForm();
+  }
+
+  function resetForm() {
+    setFiles({
+      bankFile: [],
+      creditFile: [],
+    });
+    setError("");
+    setResult(null);
+    setIsSubmitting(false);
+    setFormVersion((current) => current + 1);
   }
 
   return (
@@ -174,6 +187,7 @@ export default function Home() {
                       <input
                         accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         className="sr-only"
+                        key={`${key}-${formVersion}`}
                         multiple
                         name={key}
                         onChange={(event) => handleFileChange(key, event)}
@@ -231,13 +245,22 @@ export default function Home() {
               </p>
 
               {result ? (
-                <button
-                  className="mt-5 inline-flex h-11 items-center justify-center bg-[#477061] px-5 text-sm font-semibold text-white transition hover:bg-[#36584b]"
-                  onClick={downloadReport}
-                  type="button"
-                >
-                  הורד דוח Excel
-                </button>
+                <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    className="inline-flex h-11 items-center justify-center bg-[#477061] px-5 text-sm font-semibold text-white transition hover:bg-[#36584b]"
+                    onClick={downloadReport}
+                    type="button"
+                  >
+                    הורד דוח Excel
+                  </button>
+                  <button
+                    className="inline-flex h-11 items-center justify-center border border-[#aeb7ae] bg-white px-5 text-sm font-semibold text-[#1d2521] transition hover:border-[#1d2521]"
+                    onClick={resetForm}
+                    type="button"
+                  >
+                    סיווג חדש
+                  </button>
+                </div>
               ) : null}
             </section>
           </form>
