@@ -486,9 +486,9 @@ function classifyTransaction(
   const categoryFallback = classifyBySourceCategory(sourceCategory);
   return {
     direction: amount < 0 ? ("הכנסה" as const) : ("הוצאה" as const),
-    mainCategory: categoryFallback?.mainCategory ?? "",
+    mainCategory: categoryFallback?.mainCategory ?? "לא לסיווג",
     recurrence: "",
-    subCategory: categoryFallback?.subCategory ?? "",
+    subCategory: categoryFallback?.subCategory ?? "לא לסיווג",
   };
 }
 
@@ -506,7 +506,7 @@ function classifyBySourceCategory(sourceCategory: string) {
   }
 
   if (sourceCategory.includes("ביטוח")) {
-    return { mainCategory: "", subCategory: "" };
+    return { mainCategory: "לא לסיווג", subCategory: "לא לסיווג" };
   }
 
   return null;
@@ -549,6 +549,7 @@ async function buildTemplateReportWorkbook(
   removeTemplateSourceSheets(workbook);
   fillTemplateSummarySheet(workbook, summaries);
   fillTemplateClassificationSheet(workbook, transactions);
+  fillTemplateResultSheet(workbook, transactions);
   fillTemplateImportSheet(workbook, transactions);
 
   const buffer = await workbook.xlsx.writeBuffer();
@@ -608,9 +609,9 @@ function fillTemplateClassificationSheet(workbook: ExcelJS.Workbook, transaction
   const monthCount = Math.max(1, countDistinctMonths(transactions));
 
   sheet.getCell("B2").value = monthCount;
-  sheet.getCell("B3").value = { formula: "'שלב ג - תוצאות השיקוף'!B2" };
-  sheet.getCell("B4").value = { formula: "'שלב ג - תוצאות השיקוף'!E2" };
-  sheet.getCell("B5").value = { formula: "(B4-B3)" };
+  sheet.getCell("B3").value = { formula: "'שלב ג - תוצאות השיקוף'!B2", result: 0 };
+  sheet.getCell("B4").value = { formula: "'שלב ג - תוצאות השיקוף'!E2", result: 0 };
+  sheet.getCell("B5").value = { formula: "(B4-B3)", result: 0 };
 
   for (let rowNumber = 9; rowNumber <= lastTemplateRow; rowNumber += 1) {
     for (let columnNumber = 1; columnNumber <= 16; columnNumber += 1) {
@@ -620,11 +621,14 @@ function fillTemplateClassificationSheet(workbook: ExcelJS.Workbook, transaction
 
   transactions.forEach((transaction, index) => {
     const rowNumber = index + 9;
+    const monthlyAverage = calculateMonthlyAverage(transaction, monthCount);
+    const recurrenceMonths = getRecurrenceMonthDivisor(transaction.recurrence, monthCount);
+    const duplicateCount = countDuplicateTransaction(transactions, transaction);
     const values = [
       transaction.sourceName,
       transaction.date,
       transaction.description,
-      transaction.direction === "הוצאה" ? transaction.amount : -transaction.amount,
+      transaction.amount,
       transaction.direction,
       transaction.recurrence,
       transaction.mainCategory,
@@ -634,9 +638,9 @@ function fillTemplateClassificationSheet(workbook: ExcelJS.Workbook, transaction
       transaction.chargeCurrency,
       transaction.cardOrAccount,
       "",
-      { formula: `IF(OR(F${rowNumber}=$P$1,F${rowNumber}="",F${rowNumber}=0),D${rowNumber}/$B$2,IF(OR(F${rowNumber}=$P$2,F${rowNumber}=$P$3,F${rowNumber}=$P$4),D${rowNumber}/(O${rowNumber}*P${rowNumber}),D${rowNumber}/O${rowNumber}))` },
-      { formula: `IFERROR(VLOOKUP(F${rowNumber},$P$1:$Q$4,2,0),F${rowNumber})` },
-      { formula: `IF(C${rowNumber}="",1,COUNTIFS($C$9:$C$1499,C${rowNumber},$H$9:$H$1499,H${rowNumber}))` },
+      { formula: `IF(OR(F${rowNumber}=$P$1,F${rowNumber}="",F${rowNumber}=0),D${rowNumber}/$B$2,IF(OR(F${rowNumber}=$P$2,F${rowNumber}=$P$3,F${rowNumber}=$P$4),D${rowNumber}/(O${rowNumber}*P${rowNumber}),D${rowNumber}/O${rowNumber}))`, result: monthlyAverage },
+      { formula: `IFERROR(VLOOKUP(F${rowNumber},$P$1:$Q$4,2,0),F${rowNumber})`, result: recurrenceMonths },
+      { formula: `IF(C${rowNumber}="",1,COUNTIFS($C$9:$C$1499,C${rowNumber},$H$9:$H$1499,H${rowNumber}))`, result: duplicateCount },
     ];
 
     values.forEach((value, columnIndex) => {
@@ -648,6 +652,192 @@ function fillTemplateClassificationSheet(workbook: ExcelJS.Workbook, transaction
     from: "A8",
     to: `P${lastOutputRow}`,
   };
+}
+
+function fillTemplateResultSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+  const sheet = workbook.getWorksheet("שלב ג - תוצאות השיקוף");
+  const categorySheet = workbook.getWorksheet("רשימת הסעיפים");
+
+  if (!sheet || !categorySheet) {
+    return;
+  }
+
+  const monthCount = Math.max(1, countDistinctMonths(transactions));
+  const totalsBySubCategory = calculateTotalsBySubCategory(transactions, monthCount);
+
+  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    setCategoryLabelResult(sheet.getCell(rowNumber, 1), categorySheet);
+    setCategoryLabelResult(sheet.getCell(rowNumber, 4), categorySheet);
+    setSummaryDetailResult(sheet, rowNumber, 2, totalsBySubCategory);
+    setSummaryDetailResult(sheet, rowNumber, 5, totalsBySubCategory);
+  }
+
+  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    setSummaryRangeResult(sheet, rowNumber, 2);
+    setSummaryRangeResult(sheet, rowNumber, 5);
+  }
+
+  setSummaryRangeResult(sheet, 2, 2);
+  setSummaryRangeResult(sheet, 2, 5);
+
+  const expenseTotal = readFormulaResultNumber(sheet.getCell("B2"));
+  const incomeTotal = readFormulaResultNumber(sheet.getCell("E2"));
+  const difference = incomeTotal - expenseTotal;
+  sheet.getCell("H2").value = { formula: "E2-B2", result: difference };
+
+  const classificationSheet = workbook.getWorksheet("שלב ב - סיווג תנועות");
+  if (classificationSheet) {
+    classificationSheet.getCell("B3").value = { formula: "'שלב ג - תוצאות השיקוף'!B2", result: expenseTotal };
+    classificationSheet.getCell("B4").value = { formula: "'שלב ג - תוצאות השיקוף'!E2", result: incomeTotal };
+    classificationSheet.getCell("B5").value = { formula: "(B4-B3)", result: difference };
+  }
+}
+
+function setCategoryLabelResult(cell: ExcelJS.Cell, categorySheet: ExcelJS.Worksheet) {
+  const formula = getCellFormula(cell);
+  const reference = formula?.match(/^'רשימת הסעיפים'!([A-Z]+)(\d+)$/);
+
+  if (!formula || !reference) {
+    return;
+  }
+
+  const [, columnName, rowText] = reference;
+  const label = readCellPlainValue(categorySheet.getCell(`${columnName}${rowText}`));
+  cell.value = { formula, result: label || 0 };
+}
+
+function setSummaryDetailResult(
+  sheet: ExcelJS.Worksheet,
+  rowNumber: number,
+  columnNumber: number,
+  totalsBySubCategory: Map<string, number>,
+) {
+  const cell = sheet.getCell(rowNumber, columnNumber);
+  const formula = getCellFormula(cell);
+
+  if (!formula) {
+    return;
+  }
+
+  const sumIfReference = formula.match(/IF\(([AD])\d+<>0,SUMIF\(/);
+  if (sumIfReference) {
+    const labelColumn = sumIfReference[1] === "A" ? 1 : 4;
+    const label = readCellPlainValue(sheet.getCell(rowNumber, labelColumn));
+    cell.value = { formula, result: totalsBySubCategory.get(label) ?? 0 };
+  }
+}
+
+function setSummaryRangeResult(sheet: ExcelJS.Worksheet, rowNumber: number, columnNumber: number) {
+  const cell = sheet.getCell(rowNumber, columnNumber);
+  const formula = getCellFormula(cell);
+
+  if (!formula) {
+    return;
+  }
+
+  const rangeSum = formula.match(/^SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)$/);
+  if (rangeSum) {
+    const [, startColumn, startRowText, endColumn, endRowText] = rangeSum;
+    const startRow = Number(startRowText);
+    const endRow = Number(endRowText);
+    let result = 0;
+
+    if (startColumn === endColumn && Number.isFinite(startRow) && Number.isFinite(endRow)) {
+      for (let currentRow = startRow; currentRow <= endRow; currentRow += 1) {
+        result += readFormulaResultNumber(sheet.getCell(`${startColumn}${currentRow}`));
+      }
+    }
+
+    cell.value = { formula, result };
+    return;
+  }
+
+  const cellSum = formula.match(/^SUM\((.+)\)$/);
+  if (cellSum) {
+    const result = cellSum[1]
+      .split(",")
+      .map((address) => readFormulaResultNumber(sheet.getCell(address.trim())))
+      .reduce((sum, value) => sum + value, 0);
+    cell.value = { formula, result };
+  }
+}
+
+function calculateTotalsBySubCategory(transactions: NormalizedTransaction[], monthCount: number) {
+  return transactions.reduce((totals, transaction) => {
+    const key = transaction.subCategory.trim();
+
+    if (key) {
+      totals.set(key, (totals.get(key) ?? 0) + calculateMonthlyAverage(transaction, monthCount));
+    }
+
+    return totals;
+  }, new Map<string, number>());
+}
+
+function calculateMonthlyAverage(transaction: NormalizedTransaction, monthCount: number) {
+  const recurrenceMonths = getRecurrenceMonthDivisor(transaction.recurrence, monthCount);
+  const divisor = recurrenceMonths === monthCount ? monthCount : recurrenceMonths;
+  return transaction.amount / Math.max(1, divisor);
+}
+
+function getRecurrenceMonthDivisor(recurrence: string, monthCount: number) {
+  const normalized = recurrence.trim();
+
+  if (!normalized || normalized === "חודשי/מזדמן") {
+    return monthCount;
+  }
+
+  if (normalized === "שנתי") {
+    return 12;
+  }
+
+  if (normalized === "דו-חודשי") {
+    return 2;
+  }
+
+  if (normalized === "רבעוני") {
+    return 3;
+  }
+
+  const numericValue = Number.parseFloat(normalized);
+  return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : monthCount;
+}
+
+function countDuplicateTransaction(transactions: NormalizedTransaction[], target: NormalizedTransaction) {
+  const duplicateCount = transactions.filter(
+    (transaction) => transaction.description === target.description && transaction.subCategory === target.subCategory,
+  ).length;
+  return Math.max(1, duplicateCount);
+}
+
+function getCellFormula(cell: ExcelJS.Cell) {
+  const value = cell.value;
+  return value && typeof value === "object" && "formula" in value ? String(value.formula) : "";
+}
+
+function readCellPlainValue(cell: ExcelJS.Cell) {
+  const value = cell.value;
+
+  if (value && typeof value === "object" && "result" in value) {
+    return String(value.result ?? "").trim();
+  }
+
+  return String(value ?? "").trim();
+}
+
+function readFormulaResultNumber(cell: ExcelJS.Cell) {
+  const value = cell.value;
+
+  if (typeof value === "number") {
+    return value;
+  }
+
+  if (value && typeof value === "object" && "result" in value) {
+    const result = Number(value.result);
+    return Number.isFinite(result) ? result : 0;
+  }
+
+  return 0;
 }
 
 function fillTemplateImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
