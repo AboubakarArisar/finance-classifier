@@ -24,6 +24,7 @@ files/*
 /.data/
 
 # misc
+.claude/
 .DS_Store
 *.pem
 
