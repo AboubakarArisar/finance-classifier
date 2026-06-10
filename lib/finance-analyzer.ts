@@ -542,7 +542,7 @@ async function buildTemplateReportWorkbook(
   await workbook.xlsx.readFile(shamirTemplatePath);
   workbook.creator = "Finance Classifier";
   workbook.modified = new Date();
-  workbook.calcProperties.fullCalcOnLoad = true;
+  workbook.calcProperties = { fullCalcOnLoad: true };
   workbook.views = [{ activeTab: 2, firstSheet: 0, height: 12000, visibility: "visible", width: 20000, x: 0, y: 0 }];
   clearUnsupportedTemplateFormatting(workbook);
 
@@ -703,7 +703,7 @@ function setCategoryLabelResult(cell: ExcelJS.Cell, categorySheet: ExcelJS.Works
 
   const [, columnName, rowText] = reference;
   const label = readCellPlainValue(categorySheet.getCell(`${columnName}${rowText}`));
-  cell.value = { formula, result: label || 0 };
+  cell.value = label || null;
 }
 
 function setSummaryDetailResult(
