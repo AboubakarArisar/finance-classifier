@@ -63,7 +63,6 @@ type NormalizedTransaction = {
 
 const jobsDir = getJobsDir();
 const mappingPath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "category-mapping.xlsx");
-const shamirTemplatePath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "shamir-template.xlsx");
 const retentionMs = 30 * 24 * 60 * 60 * 1000;
 const excelExtensions = [".xls", ".xlsx", ".xlsm"];
 
@@ -183,7 +182,7 @@ export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Pro
   }
 
   const reportBuffer = await buildReportWorkbook(transactions, sheetSummaries);
-  const fileName = `shamir-classified-${jobId}.xlsx`;
+  const fileName = `financial-classification-${jobId}.xlsx`;
   await writeFile(path.join(jobDir, "report.xlsx"), reportBuffer);
 
   return {
@@ -514,252 +513,22 @@ function classifyBySourceCategory(sourceCategory: string) {
 
 async function buildReportWorkbook(transactions: NormalizedTransaction[], summaries: ParsedSheetSummary[]) {
   const sortedTransactions = transactions.slice().sort((left, right) => compareDateText(left.date, right.date));
-
-  if (existsSync(shamirTemplatePath)) {
-    return buildTemplateReportWorkbook(sortedTransactions, summaries);
-  }
-
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Finance Classifier";
   workbook.created = new Date();
+  workbook.calcProperties = { fullCalcOnLoad: true };
   workbook.views = [{ activeTab: 0, firstSheet: 0, height: 12000, visibility: "visible", width: 20000, x: 0, y: 0 }];
 
   appendExcelClassificationSheet(workbook, sortedTransactions);
+  appendExcelResultSheet(workbook, sortedTransactions);
   appendExcelSummarySheet(workbook, summaries);
   appendExcelCategorySheet(workbook);
   appendExcelImportSheet(workbook, sortedTransactions);
   appendExcelChoicesSheet(workbook);
+  sanitizeWorkbookForExcel(workbook);
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
-}
-
-async function buildTemplateReportWorkbook(
-  transactions: NormalizedTransaction[],
-  summaries: ParsedSheetSummary[],
-) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(shamirTemplatePath);
-  workbook.creator = "Finance Classifier";
-  workbook.modified = new Date();
-  workbook.calcProperties = { fullCalcOnLoad: true };
-  workbook.views = [{ activeTab: 2, firstSheet: 0, height: 12000, visibility: "visible", width: 20000, x: 0, y: 0 }];
-  clearUnsupportedTemplateFormatting(workbook);
-
-  removeTemplateSourceSheets(workbook);
-  fillTemplateSummarySheet(workbook, summaries);
-  fillTemplateClassificationSheet(workbook, transactions);
-  fillTemplateResultSheet(workbook, transactions);
-  fillTemplateImportSheet(workbook, transactions);
-
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
-}
-
-function clearUnsupportedTemplateFormatting(workbook: ExcelJS.Workbook) {
-  workbook.worksheets.forEach((sheet) => {
-    (sheet as ExcelJS.Worksheet & { conditionalFormattings: unknown[] }).conditionalFormattings = [];
-  });
-}
-
-function removeTemplateSourceSheets(workbook: ExcelJS.Workbook) {
-  workbook.worksheets
-    .filter((sheet) => /^(אשראי|בנק)-\d+$/.test(sheet.name))
-    .forEach((sheet) => workbook.removeWorksheet(sheet.id));
-}
-
-function fillTemplateSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSheetSummary[]) {
-  const sheet = workbook.getWorksheet("שמיר");
-
-  if (!sheet) {
-    return;
-  }
-
-  sheet.getCell("A1").value = "נוצר באמצעות Finance Classifier";
-  sheet.getCell("B1").value = new Date().toLocaleDateString("he-IL");
-
-  for (let rowNumber = 3; rowNumber <= Math.max(sheet.rowCount, summaries.length + 2); rowNumber += 1) {
-    for (let columnNumber = 1; columnNumber <= 7; columnNumber += 1) {
-      sheet.getCell(rowNumber, columnNumber).value = null;
-    }
-  }
-
-  summaries.forEach((summary, index) => {
-    const row = sheet.getRow(index + 3);
-    row.getCell(1).value = summary.originalFileName;
-    row.getCell(2).value = summary.originalSheetName;
-    row.getCell(3).value = summary.sourceName;
-    row.getCell(4).value = summary.transactionCount;
-    row.getCell(5).value = summary.totalAmount;
-    row.getCell(6).value = summary.maxDate;
-    row.getCell(7).value = summary.minDate;
-  });
-}
-
-function fillTemplateClassificationSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
-  const sheet = workbook.getWorksheet("שלב ב - סיווג תנועות");
-
-  if (!sheet) {
-    appendExcelClassificationSheet(workbook, transactions);
-    return;
-  }
-
-  const lastTemplateRow = Math.max(sheet.rowCount, 1499);
-  const lastOutputRow = transactions.length + 8;
-  const monthCount = Math.max(1, countDistinctMonths(transactions));
-
-  sheet.getCell("B2").value = monthCount;
-  sheet.getCell("B3").value = { formula: "'שלב ג - תוצאות השיקוף'!B2", result: 0 };
-  sheet.getCell("B4").value = { formula: "'שלב ג - תוצאות השיקוף'!E2", result: 0 };
-  sheet.getCell("B5").value = { formula: "(B4-B3)", result: 0 };
-
-  for (let rowNumber = 9; rowNumber <= lastTemplateRow; rowNumber += 1) {
-    for (let columnNumber = 1; columnNumber <= 16; columnNumber += 1) {
-      sheet.getCell(rowNumber, columnNumber).value = null;
-    }
-  }
-
-  transactions.forEach((transaction, index) => {
-    const rowNumber = index + 9;
-    const monthlyAverage = calculateMonthlyAverage(transaction, monthCount);
-    const recurrenceMonths = getRecurrenceMonthDivisor(transaction.recurrence, monthCount);
-    const duplicateCount = countDuplicateTransaction(transactions, transaction);
-    const values = [
-      transaction.sourceName,
-      transaction.date,
-      transaction.description,
-      transaction.amount,
-      transaction.direction,
-      transaction.recurrence,
-      transaction.mainCategory,
-      transaction.subCategory,
-      transaction.note,
-      transaction.originalAmount,
-      transaction.chargeCurrency,
-      transaction.cardOrAccount,
-      "",
-      { formula: `IF(OR(F${rowNumber}=$P$1,F${rowNumber}="",F${rowNumber}=0),D${rowNumber}/$B$2,IF(OR(F${rowNumber}=$P$2,F${rowNumber}=$P$3,F${rowNumber}=$P$4),D${rowNumber}/(O${rowNumber}*P${rowNumber}),D${rowNumber}/O${rowNumber}))`, result: monthlyAverage },
-      { formula: `IFERROR(VLOOKUP(F${rowNumber},$P$1:$Q$4,2,0),F${rowNumber})`, result: recurrenceMonths },
-      { formula: `IF(C${rowNumber}="",1,COUNTIFS($C$9:$C$1499,C${rowNumber},$H$9:$H$1499,H${rowNumber}))`, result: duplicateCount },
-    ];
-
-    values.forEach((value, columnIndex) => {
-      sheet.getCell(rowNumber, columnIndex + 1).value = value;
-    });
-  });
-
-  sheet.autoFilter = {
-    from: "A8",
-    to: `P${lastOutputRow}`,
-  };
-}
-
-function fillTemplateResultSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
-  const sheet = workbook.getWorksheet("שלב ג - תוצאות השיקוף");
-  const categorySheet = workbook.getWorksheet("רשימת הסעיפים");
-
-  if (!sheet || !categorySheet) {
-    return;
-  }
-
-  const monthCount = Math.max(1, countDistinctMonths(transactions));
-  const totalsBySubCategory = calculateTotalsBySubCategory(transactions, monthCount);
-
-  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    setCategoryLabelResult(sheet.getCell(rowNumber, 1), categorySheet);
-    setCategoryLabelResult(sheet.getCell(rowNumber, 4), categorySheet);
-    setSummaryDetailResult(sheet, rowNumber, 2, totalsBySubCategory);
-    setSummaryDetailResult(sheet, rowNumber, 5, totalsBySubCategory);
-  }
-
-  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    setSummaryRangeResult(sheet, rowNumber, 2);
-    setSummaryRangeResult(sheet, rowNumber, 5);
-  }
-
-  setSummaryRangeResult(sheet, 2, 2);
-  setSummaryRangeResult(sheet, 2, 5);
-
-  const expenseTotal = readFormulaResultNumber(sheet.getCell("B2"));
-  const incomeTotal = readFormulaResultNumber(sheet.getCell("E2"));
-  const difference = incomeTotal - expenseTotal;
-  sheet.getCell("H2").value = { formula: "E2-B2", result: difference };
-
-  const classificationSheet = workbook.getWorksheet("שלב ב - סיווג תנועות");
-  if (classificationSheet) {
-    classificationSheet.getCell("B3").value = { formula: "'שלב ג - תוצאות השיקוף'!B2", result: expenseTotal };
-    classificationSheet.getCell("B4").value = { formula: "'שלב ג - תוצאות השיקוף'!E2", result: incomeTotal };
-    classificationSheet.getCell("B5").value = { formula: "(B4-B3)", result: difference };
-  }
-}
-
-function setCategoryLabelResult(cell: ExcelJS.Cell, categorySheet: ExcelJS.Worksheet) {
-  const formula = getCellFormula(cell);
-  const reference = formula?.match(/^'רשימת הסעיפים'!([A-Z]+)(\d+)$/);
-
-  if (!formula || !reference) {
-    return;
-  }
-
-  const [, columnName, rowText] = reference;
-  const label = readCellPlainValue(categorySheet.getCell(`${columnName}${rowText}`));
-  cell.value = label || null;
-}
-
-function setSummaryDetailResult(
-  sheet: ExcelJS.Worksheet,
-  rowNumber: number,
-  columnNumber: number,
-  totalsBySubCategory: Map<string, number>,
-) {
-  const cell = sheet.getCell(rowNumber, columnNumber);
-  const formula = getCellFormula(cell);
-
-  if (!formula) {
-    return;
-  }
-
-  const sumIfReference = formula.match(/IF\(([AD])\d+<>0,SUMIF\(/);
-  if (sumIfReference) {
-    const labelColumn = sumIfReference[1] === "A" ? 1 : 4;
-    const label = readCellPlainValue(sheet.getCell(rowNumber, labelColumn));
-    cell.value = { formula, result: totalsBySubCategory.get(label) ?? 0 };
-  }
-}
-
-function setSummaryRangeResult(sheet: ExcelJS.Worksheet, rowNumber: number, columnNumber: number) {
-  const cell = sheet.getCell(rowNumber, columnNumber);
-  const formula = getCellFormula(cell);
-
-  if (!formula) {
-    return;
-  }
-
-  const rangeSum = formula.match(/^SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)$/);
-  if (rangeSum) {
-    const [, startColumn, startRowText, endColumn, endRowText] = rangeSum;
-    const startRow = Number(startRowText);
-    const endRow = Number(endRowText);
-    let result = 0;
-
-    if (startColumn === endColumn && Number.isFinite(startRow) && Number.isFinite(endRow)) {
-      for (let currentRow = startRow; currentRow <= endRow; currentRow += 1) {
-        result += readFormulaResultNumber(sheet.getCell(`${startColumn}${currentRow}`));
-      }
-    }
-
-    cell.value = { formula, result };
-    return;
-  }
-
-  const cellSum = formula.match(/^SUM\((.+)\)$/);
-  if (cellSum) {
-    const result = cellSum[1]
-      .split(",")
-      .map((address) => readFormulaResultNumber(sheet.getCell(address.trim())))
-      .reduce((sum, value) => sum + value, 0);
-    cell.value = { formula, result };
-  }
 }
 
 function calculateTotalsBySubCategory(transactions: NormalizedTransaction[], monthCount: number) {
@@ -810,63 +579,8 @@ function countDuplicateTransaction(transactions: NormalizedTransaction[], target
   return Math.max(1, duplicateCount);
 }
 
-function getCellFormula(cell: ExcelJS.Cell) {
-  const value = cell.value;
-  return value && typeof value === "object" && "formula" in value ? String(value.formula) : "";
-}
-
-function readCellPlainValue(cell: ExcelJS.Cell) {
-  const value = cell.value;
-
-  if (value && typeof value === "object" && "result" in value) {
-    return String(value.result ?? "").trim();
-  }
-
-  return String(value ?? "").trim();
-}
-
-function readFormulaResultNumber(cell: ExcelJS.Cell) {
-  const value = cell.value;
-
-  if (typeof value === "number") {
-    return value;
-  }
-
-  if (value && typeof value === "object" && "result" in value) {
-    const result = Number(value.result);
-    return Number.isFinite(result) ? result : 0;
-  }
-
-  return 0;
-}
-
-function fillTemplateImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
-  const sheet = workbook.getWorksheet("ליבוא מהתוכנה");
-
-  if (!sheet) {
-    return;
-  }
-
-  for (let rowNumber = 3; rowNumber <= Math.max(sheet.rowCount, transactions.length + 2); rowNumber += 1) {
-    for (let columnNumber = 1; columnNumber <= 7; columnNumber += 1) {
-      sheet.getCell(rowNumber, columnNumber).value = null;
-    }
-  }
-
-  transactions.forEach((transaction, index) => {
-    const row = sheet.getRow(index + 3);
-    row.getCell(1).value = transaction.date;
-    row.getCell(2).value = transaction.description;
-    row.getCell(3).value = transaction.direction === "הוצאה" ? transaction.amount : -transaction.amount;
-    row.getCell(4).value = transaction.direction;
-    row.getCell(5).value = transaction.mainCategory;
-    row.getCell(6).value = transaction.subCategory;
-    row.getCell(7).value = transaction.note;
-  });
-}
-
 function appendExcelSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSheetSummary[]) {
-  const sheet = workbook.addWorksheet("שמיר", {
+  const sheet = workbook.addWorksheet("סיכום קבצים", {
     views: [{ rightToLeft: true }],
   });
   sheet.addRows([
@@ -895,8 +609,8 @@ function appendExcelSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSh
 }
 
 function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
-  const sheet = workbook.addWorksheet("שלב ב - סיווג תנועות", {
-    views: [{ rightToLeft: true, state: "frozen", ySplit: 8 }],
+  const sheet = workbook.addWorksheet("סיווג תנועות", {
+    views: [{ activeCell: "G9", rightToLeft: true, state: "frozen", ySplit: 8 }],
   });
   const lastRow = transactions.length + 8;
   const monthCount = Math.max(1, countDistinctMonths(transactions));
@@ -904,17 +618,19 @@ function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions
   sheet.addRows([
     ["שם המשפחה", "ישראלי"],
     ["תקופת השיקוף", monthCount],
-    ["ממוצע הוצאות בחודש", { formula: `IFERROR(SUMIF(E9:E${lastRow},"הוצאה",D9:D${lastRow})/B2,0)` }],
-    ["ממוצע הכנסות בחודש", { formula: `IFERROR(ABS(SUMIF(E9:E${lastRow},"הכנסה",D9:D${lastRow}))/B2,0)` }],
+    ["ממוצע הוצאות בחודש", { formula: "'תוצאות השיקוף'!B2" }],
+    ["ממוצע הכנסות בחודש", { formula: "'תוצאות השיקוף'!E2" }],
     ["מאזן חודשי", { formula: "B4-B3" }],
     ["שימו לב! ניתן לבחור ולתקן סעיף ראשי, שם סעיף והוצאה/הכנסה בעזרת הרשימות הנפתחות."],
     ["תנועות מתוך דפי בנק וכרטיסי אשראי"],
     classificationHeaders,
-    ...transactions.map((transaction) => [
+    ...transactions.map((transaction, index) => {
+      const rowNumber = index + 9;
+      return [
       transaction.sourceName,
       transaction.date,
       transaction.description,
-      transaction.direction === "הוצאה" ? transaction.amount : -transaction.amount,
+      transaction.amount,
       transaction.direction,
       transaction.recurrence,
       transaction.mainCategory,
@@ -924,10 +640,13 @@ function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions
       transaction.chargeCurrency,
       transaction.cardOrAccount,
       "",
-      "",
-      "",
-      "1",
-    ]),
+      {
+        formula: `IFERROR(IF(OR(F${rowNumber}="",F${rowNumber}="חודשי/מזדמן"),D${rowNumber}/$B$2,IF(F${rowNumber}="שנתי",D${rowNumber}/12,IF(F${rowNumber}="דו-חודשי",D${rowNumber}/2,IF(F${rowNumber}="רבעוני",D${rowNumber}/3,IF(ISNUMBER(F${rowNumber}),D${rowNumber}/F${rowNumber},D${rowNumber}))))),0)`,
+      },
+      getRecurrenceMonthDivisor(transaction.recurrence, monthCount),
+      countDuplicateTransaction(transactions, transaction),
+      ];
+    }),
   ]);
 
   sheet.columns = [
@@ -961,32 +680,79 @@ function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions
     sheet.getCell(`D${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00';
     sheet.getCell(`E${rowNumber}`).dataValidation = {
       allowBlank: false,
-      formulae: ["בחירות!$C$2:$C$3"],
+      formulae: ['"הוצאה,הכנסה"'],
       showErrorMessage: true,
       type: "list",
     };
     sheet.getCell(`F${rowNumber}`).dataValidation = {
       allowBlank: true,
-      formulae: ["בחירות!$D$2:$D$6"],
+      formulae: ["RecurrenceList"],
       type: "list",
     };
     sheet.getCell(`G${rowNumber}`).dataValidation = {
       allowBlank: true,
-      formulae: ["בחירות!$A$2:$A$20"],
+      formulae: ["MainCategoryList"],
       showErrorMessage: true,
       type: "list",
     };
     sheet.getCell(`H${rowNumber}`).dataValidation = {
       allowBlank: true,
-      formulae: ["בחירות!$B$2:$B$80"],
+      formulae: ["SubCategoryList"],
       showErrorMessage: true,
       type: "list",
     };
+    sheet.getCell(`G${rowNumber}`).fill = { fgColor: { argb: "FFFFF2CC" }, pattern: "solid", type: "pattern" };
+    sheet.getCell(`H${rowNumber}`).fill = { fgColor: { argb: "FFFFF2CC" }, pattern: "solid", type: "pattern" };
+  }
+}
+
+function appendExcelResultSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+  const sheet = workbook.addWorksheet("תוצאות השיקוף", {
+    views: [{ rightToLeft: true }],
+  });
+  const monthCount = Math.max(1, countDistinctMonths(transactions));
+  const totalsBySubCategory = calculateTotalsBySubCategory(transactions, monthCount);
+  const expenseSubCategories = getExpenseSubCategories();
+  const incomeSubCategories = getIncomeSubCategories();
+  const maxRows = Math.max(expenseSubCategories.length, incomeSubCategories.length);
+
+  sheet.addRows([
+    ["סה\"כ הוצאות", { formula: `SUM(B5:B${maxRows + 4})` }, "", "סה\"כ הכנסות", { formula: `SUM(E5:E${maxRows + 4})` }, "", "הפרש", { formula: "E2-B2" }],
+    [],
+    ["קטגוריות הוצאה", "ממוצע חודשי", "", "קטגוריות הכנסה", "ממוצע חודשי"],
+  ]);
+
+  for (let index = 0; index < maxRows; index += 1) {
+    const rowNumber = index + 5;
+    const expenseCategory = expenseSubCategories[index] ?? "";
+    const incomeCategory = incomeSubCategories[index] ?? "";
+    sheet.addRow([
+      expenseCategory,
+      expenseCategory
+        ? { formula: `SUMIF('סיווג תנועות'!$H$9:$H$1499,A${rowNumber},'סיווג תנועות'!$N$9:$N$1499)` }
+        : "",
+      "",
+      incomeCategory,
+      incomeCategory
+        ? { formula: `SUMIF('סיווג תנועות'!$H$9:$H$1499,D${rowNumber},'סיווג תנועות'!$N$9:$N$1499)` }
+        : "",
+    ]);
+  }
+
+  sheet.columns = [{ width: 34 }, { width: 16 }, { width: 4 }, { width: 34 }, { width: 16 }, { width: 4 }, { width: 12 }, { width: 16 }];
+  [1, 3].forEach((rowNumber) => styleHeaderRow(sheet.getRow(rowNumber)));
+  ["B1", "E1", "H1"].forEach((cellAddress) => {
+    sheet.getCell(cellAddress).numFmt = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
+    sheet.getCell(cellAddress).font = { bold: true };
+  });
+  for (let rowNumber = 5; rowNumber <= maxRows + 4; rowNumber += 1) {
+    sheet.getCell(`B${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
+    sheet.getCell(`E${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
   }
 }
 
 function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
-  const sheet = workbook.addWorksheet("רשימת הסעיפים", {
+  const sheet = workbook.addWorksheet("רשימת קטגוריות", {
     views: [{ rightToLeft: true }],
   });
   sheet.addRows(categorySheetRows);
@@ -1020,22 +786,74 @@ function appendExcelChoicesSheet(workbook: ExcelJS.Workbook) {
     state: "veryHidden",
     views: [{ rightToLeft: true }],
   });
-  const mainCategories = categorySheetRows[0].filter(Boolean);
-  const subCategories = [...new Set(categorySheetRows.slice(1).flat().filter(Boolean))];
+  const allMainCategories = getAllMainCategories();
+  const allSubCategories = getAllSubCategories();
   const directions = ["הוצאה", "הכנסה"];
   const recurrences = ["", "חודשי/מזדמן", "שנתי", "דו-חודשי", "רבעוני", "חלוקת הסכום ב X"];
-  const maxRows = Math.max(mainCategories.length, subCategories.length, directions.length, recurrences.length);
+  const maxRows = Math.max(allMainCategories.length, allSubCategories.length, directions.length, recurrences.length);
 
   sheet.addRow(["סעיף ראשי", "שם סעיף", "הוצאה/הכנסה", "מחזוריות"]);
 
   for (let index = 0; index < maxRows; index += 1) {
     sheet.addRow([
-      mainCategories[index] ?? "",
-      subCategories[index] ?? "",
+      allMainCategories[index] ?? "",
+      allSubCategories[index] ?? "",
       directions[index] ?? "",
       recurrences[index] ?? "",
     ]);
   }
+
+  workbook.definedNames.add("'בחירות'!$A$2:$A$" + (allMainCategories.length + 1), "MainCategoryList");
+  workbook.definedNames.add("'בחירות'!$B$2:$B$" + (allSubCategories.length + 1), "SubCategoryList");
+  workbook.definedNames.add("'בחירות'!$D$2:$D$" + (recurrences.length + 1), "RecurrenceList");
+}
+
+function getAllMainCategories() {
+  return [...new Set([...getExpenseMainCategories(), ...getIncomeMainCategories()])];
+}
+
+function getAllSubCategories() {
+  return [...new Set([...getExpenseSubCategories(), ...getIncomeSubCategories()])];
+}
+
+function getExpenseMainCategories() {
+  return [...new Set([...categorySheetRows[0].slice(0, 16).filter(Boolean), "לא לסיווג"])];
+}
+
+function getIncomeMainCategories() {
+  return [...new Set([...categorySheetRows[0].slice(16, 18).filter(Boolean), "לא לסיווג"])];
+}
+
+function getExpenseSubCategories() {
+  return getSubCategories(0, 16);
+}
+
+function getIncomeSubCategories() {
+  return getSubCategories(16, 18);
+}
+
+function getSubCategories(startColumn: number, endColumn: number) {
+  const values = categorySheetRows
+    .slice(1)
+    .flatMap((row) => row.slice(startColumn, endColumn))
+    .filter(Boolean);
+  return [...new Set([...values, "לא לסיווג"])];
+}
+
+function sumCategories(categories: string[], totalsBySubCategory: Map<string, number>) {
+  return categories.reduce((sum, category) => sum + (totalsBySubCategory.get(category) ?? 0), 0);
+}
+
+function sanitizeWorkbookForExcel(workbook: ExcelJS.Workbook) {
+  workbook.worksheets.forEach((sheet) => {
+    sheet.pageSetup = {
+      fitToHeight: 0,
+      fitToWidth: 0,
+      horizontalDpi: 600,
+      orientation: "portrait",
+      verticalDpi: 600,
+    };
+  });
 }
 
 function styleHeaderRow(row: ExcelJS.Row) {
