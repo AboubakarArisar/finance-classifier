@@ -61,6 +61,12 @@ type NormalizedTransaction = {
   subCategory: string;
 };
 
+type CategoryGroup = {
+  mainCategory: string;
+  namedRange: string;
+  subCategories: string[];
+};
+
 const jobsDir = getJobsDir();
 const mappingPath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "category-mapping.xlsx");
 const retentionMs = 30 * 24 * 60 * 60 * 1000;
@@ -85,17 +91,29 @@ const classificationHeaders = [
   "מס' מופעים (לשימוש פנימי)",
 ];
 
-const categorySheetRows = [
-  ["מזון ופארמה", "פנאי, בילוי ותחביבים", "ביגוד והנעלה", "תכולת בית", "אחזקת בית", "טיפוח", "חינוך", "אירועים, תרומות, צרכי דת", "בריאות", "תחבורה", "משפחה", "תקשורת", "דיור", "התחייבויות", "נכסים", "פיננסים", "שכר", "קצבאות", "לא לסיווג"],
-  ["מזון", "מסעדה ואוכל בחוץ", "ביגוד הורים", "ריהוט", "חשמל", "מספרה", "בית ספר", "חגים וצרכי דת", "קופ\"ח תשלום קבוע", "דלק", "ארועי שמחות במשפחה", "טלפון נייד ונייח", "משכנתה", "החזר חובות חודשי (למעט משכנתה) - כללי", "הפקדות לחסכונות - כללי", "עמלות", "שכר עבודה 1", "קצבת ילדים", "לא לסיווג"],
-  ["פארמה וטואלטיקה", "ספורט", "ביגוד ילדים", "מוצרי חשמל ואלקטרוניקה", "מים וביוב", "קוסמטיקה", "מסגרות צהריים", "אירוע בעבודה / לחברים", "ביטוח רפואי נוסף", "חניה", "דמי כיס", "טלויזיה ואינטרנט (ספק ותשתית)", "שכר דירה", "ריביות משיכת יתר", "", "ביטוח חיים", "שכר עבודה 2", "קצבאות - כללי", "תשלומים, שקול רישום כחוב"],
-  ["בר מים", "חופשות", "נעליים", "משחקים, צעצועים וספרים", "גז", "טיפוח - כללי", "מסגרות יום", "תרומות", "טיפולים פרטיים", "כבישי אגרה", "עזרה למשפחה", "שירותי תוכן", "מיסי ישוב / ועד בית", "", "", "ביטוח לאומי (למי שלא עובד)", "שכר עבודה 3", "סיוע בשכר דירה", ""],
-  ["אוכל מוכן / בעבודה", "בילויים ומופעים", "ביגוד והנעלה - כללי", "כלי בית", "ניקיון", "", "צהרון / מטפלת", "", "תרופות", "ביטוח רכב", "תשלום מזונות", "תקשורת - כללי", "ארנונה", "", "", "פיננסים - כללי", "שכר - כללי", "", ""],
+const categoryCatalog: CategoryGroup[] = [
+  { mainCategory: "מזון ופארמה", namedRange: "CategorySubList_1", subCategories: ["מזון", "פארמה וטואלטיקה", "בר מים", "אוכל מוכן / בעבודה", "עישון", "מזון ופארמה - כללי"] },
+  { mainCategory: "פנאי, בילוי ותחביבים", namedRange: "CategorySubList_2", subCategories: ["מסעדה ואוכל בחוץ", "ספורט", "חופשות", "בילויים ומופעים", "חיות מחמד", "חוגי מבוגרים", "בייביסיטר", "הגרלות", "פנאי - כללי"] },
+  { mainCategory: "ביגוד והנעלה", namedRange: "CategorySubList_3", subCategories: ["ביגוד הורים", "ביגוד ילדים", "נעליים", "ביגוד והנעלה - כללי"] },
+  { mainCategory: "תכולת בית", namedRange: "CategorySubList_4", subCategories: ["ריהוט", "מוצרי חשמל ואלקטרוניקה", "משחקים, צעצועים וספרים", "כלי בית", "תכולת בית - כללי"] },
+  { mainCategory: "אחזקת בית", namedRange: "CategorySubList_5", subCategories: ["חשמל", "מים וביוב", "גז", "ניקיון", "תיקונים בבית / במכשירים", "גינה", "אחזקת בית - כללי"] },
+  { mainCategory: "טיפוח", namedRange: "CategorySubList_6", subCategories: ["מספרה", "קוסמטיקה", "טיפוח - כללי"] },
+  { mainCategory: "חינוך", namedRange: "CategorySubList_7", subCategories: ["בית ספר", "מסגרות צהריים", "מסגרות יום", "צהרון / מטפלת", "הסעות", "שיעור פרטי", "מסגרות קיץ", "חוגים ותנועת נוער", "לימודים והשתלמות לבוגרים", "חינוך - כללי"] },
+  { mainCategory: "אירועים, תרומות, צרכי דת", namedRange: "CategorySubList_8", subCategories: ["חגים וצרכי דת", "אירוע בעבודה / לחברים", "תרומות"] },
+  { mainCategory: "בריאות", namedRange: "CategorySubList_9", subCategories: ["קופ\"ח תשלום קבוע", "ביטוח רפואי נוסף", "טיפולים פרטיים", "תרופות", "טיפולי שיניים / אורטודנט", "אופטיקה", "בריאות - כללי"] },
+  { mainCategory: "תחבורה", namedRange: "CategorySubList_10", subCategories: ["דלק", "חניה", "כבישי אגרה", "ביטוח רכב", "תחזוקת רכב", "תחבורה ציבורית", "רישוי רכב", "תחבורה שיתופית", "ליסינג", "תחבורה - כללי"] },
+  { mainCategory: "משפחה", namedRange: "CategorySubList_11", subCategories: ["ארועי שמחות במשפחה", "דמי כיס", "עזרה למשפחה", "תשלום מזונות", "משפחה - כללי"] },
+  { mainCategory: "תקשורת", namedRange: "CategorySubList_12", subCategories: ["טלפון נייד ונייח", "טלויזיה ואינטרנט (ספק ותשתית)", "שירותי תוכן", "תקשורת - כללי"] },
+  { mainCategory: "דיור", namedRange: "CategorySubList_13", subCategories: ["משכנתה", "שכר דירה", "מיסי ישוב / ועד בית", "ארנונה", "ביטוח נכס ותכולה", "דיור - כללי"] },
+  { mainCategory: "התחייבויות", namedRange: "CategorySubList_14", subCategories: ["החזר חובות חודשי (למעט משכנתה) - כללי", "ריביות משיכת יתר"] },
+  { mainCategory: "נכסים", namedRange: "CategorySubList_15", subCategories: ["הפקדות לחסכונות - כללי"] },
+  { mainCategory: "פיננסים", namedRange: "CategorySubList_16", subCategories: ["עמלות", "ביטוח חיים", "ביטוח לאומי (למי שלא עובד)", "פיננסים - כללי"] },
+  { mainCategory: "שכר", namedRange: "CategorySubList_17", subCategories: ["שכר עבודה 1", "שכר עבודה 2", "שכר עבודה 3", "שכר עבודה 4", "שכר - כללי"] },
+  { mainCategory: "קצבאות", namedRange: "CategorySubList_18", subCategories: ["קצבת ילדים", "קצבת נכות", "סיוע בשכר דירה", "קצבת זיקנה", "קצבאות - כללי"] },
+  { mainCategory: "הכנסות שונות", namedRange: "CategorySubList_19", subCategories: ["קבלת מזונות", "הכנסה מנכס", "עזרה מההורים", "הכנסות שונות - כללי"] },
 ];
 
 const fallbackRules: MappingRule[] = [
-  { keyword: "מקס איט פיננסי", mainCategory: "לא לסיווג", subCategory: "לא לסיווג" },
-  { keyword: "דירקט- מצטבר", mainCategory: "לא לסיווג", subCategory: "לא לסיווג" },
   { keyword: "WOLT", mainCategory: "פנאי, בילוי ותחביבים", subCategory: "מסעדה ואוכל בחוץ" },
   { keyword: "פיצה", mainCategory: "פנאי, בילוי ותחביבים", subCategory: "מסעדה ואוכל בחוץ" },
   { keyword: "קפה", mainCategory: "פנאי, בילוי ותחביבים", subCategory: "מסעדה ואוכל בחוץ" },
@@ -461,9 +479,9 @@ function classifyTransaction(
   if (/תשלום\s+\d+\s+מתוך\s+\d+/.test(note)) {
     return {
       direction: "הוצאה" as const,
-      mainCategory: "לא לסיווג",
+      mainCategory: "",
       recurrence: "",
-      subCategory: "תשלומים, שקול רישום כחוב",
+      subCategory: "",
     };
   }
 
@@ -485,9 +503,9 @@ function classifyTransaction(
   const categoryFallback = classifyBySourceCategory(sourceCategory);
   return {
     direction: amount < 0 ? ("הכנסה" as const) : ("הוצאה" as const),
-    mainCategory: categoryFallback?.mainCategory ?? "לא לסיווג",
+    mainCategory: categoryFallback?.mainCategory ?? "",
     recurrence: "",
-    subCategory: categoryFallback?.subCategory ?? "לא לסיווג",
+    subCategory: categoryFallback?.subCategory ?? "",
   };
 }
 
@@ -505,7 +523,7 @@ function classifyBySourceCategory(sourceCategory: string) {
   }
 
   if (sourceCategory.includes("ביטוח")) {
-    return { mainCategory: "לא לסיווג", subCategory: "לא לסיווג" };
+    return null;
   }
 
   return null;
@@ -520,7 +538,7 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
   workbook.views = [{ activeTab: 0, firstSheet: 0, height: 12000, visibility: "visible", width: 20000, x: 0, y: 0 }];
 
   appendExcelClassificationSheet(workbook, sortedTransactions);
-  appendExcelResultSheet(workbook, sortedTransactions);
+  appendExcelResultSheet(workbook);
   appendExcelSummarySheet(workbook, summaries);
   appendExcelCategorySheet(workbook);
   appendExcelImportSheet(workbook, sortedTransactions);
@@ -529,24 +547,6 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
-}
-
-function calculateTotalsBySubCategory(transactions: NormalizedTransaction[], monthCount: number) {
-  return transactions.reduce((totals, transaction) => {
-    const key = transaction.subCategory.trim();
-
-    if (key) {
-      totals.set(key, (totals.get(key) ?? 0) + calculateMonthlyAverage(transaction, monthCount));
-    }
-
-    return totals;
-  }, new Map<string, number>());
-}
-
-function calculateMonthlyAverage(transaction: NormalizedTransaction, monthCount: number) {
-  const recurrenceMonths = getRecurrenceMonthDivisor(transaction.recurrence, monthCount);
-  const divisor = recurrenceMonths === monthCount ? monthCount : recurrenceMonths;
-  return transaction.amount / Math.max(1, divisor);
 }
 
 function getRecurrenceMonthDivisor(recurrence: string, monthCount: number) {
@@ -691,13 +691,21 @@ function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions
     };
     sheet.getCell(`G${rowNumber}`).dataValidation = {
       allowBlank: true,
-      formulae: ["MainCategoryList"],
+      formulae: [`IF($E${rowNumber}="הכנסה",IncomeMainCategoryList,ExpenseMainCategoryList)`],
+      prompt: "בחרו סעיף ראשי כדי לצמצם את רשימת שמות הסעיף בעמודה הבאה.",
+      promptTitle: "בחירת סעיף ראשי",
+      showInputMessage: true,
       showErrorMessage: true,
       type: "list",
     };
     sheet.getCell(`H${rowNumber}`).dataValidation = {
       allowBlank: true,
-      formulae: ["SubCategoryList"],
+      formulae: [
+        `OFFSET('רשימת קטגוריות'!$A$2,0,MATCH($G${rowNumber},'רשימת קטגוריות'!$A$1:$S$1,0)-1,COUNTA(OFFSET('רשימת קטגוריות'!$A$2,0,MATCH($G${rowNumber},'רשימת קטגוריות'!$A$1:$S$1,0)-1,100,1)),1)`,
+      ],
+      prompt: "הרשימה כאן משתנה לפי הסעיף הראשי שנבחר בעמודה הקודמת.",
+      promptTitle: "בחירת שם סעיף",
+      showInputMessage: true,
       showErrorMessage: true,
       type: "list",
     };
@@ -706,12 +714,10 @@ function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions
   }
 }
 
-function appendExcelResultSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+function appendExcelResultSheet(workbook: ExcelJS.Workbook) {
   const sheet = workbook.addWorksheet("תוצאות השיקוף", {
     views: [{ rightToLeft: true }],
   });
-  const monthCount = Math.max(1, countDistinctMonths(transactions));
-  const totalsBySubCategory = calculateTotalsBySubCategory(transactions, monthCount);
   const expenseSubCategories = getExpenseSubCategories();
   const incomeSubCategories = getIncomeSubCategories();
   const maxRows = Math.max(expenseSubCategories.length, incomeSubCategories.length);
@@ -755,9 +761,12 @@ function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
   const sheet = workbook.addWorksheet("רשימת קטגוריות", {
     views: [{ rightToLeft: true }],
   });
-  sheet.addRows(categorySheetRows);
-  sheet.columns = categorySheetRows[0].map(() => ({ width: 22 }));
+  const rows = buildCategorySheetRows();
+  sheet.addRows(rows);
+  sheet.columns = rows[0].map(() => ({ width: 22 }));
   styleHeaderRow(sheet.getRow(1));
+  sheet.getRow(1).fill = { fgColor: { argb: "FFF28C28" }, pattern: "solid", type: "pattern" };
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
 }
 
 function appendExcelImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
@@ -786,62 +795,66 @@ function appendExcelChoicesSheet(workbook: ExcelJS.Workbook) {
     state: "veryHidden",
     views: [{ rightToLeft: true }],
   });
-  const allMainCategories = getAllMainCategories();
-  const allSubCategories = getAllSubCategories();
+  const expenseMainCategories = getExpenseMainCategories();
+  const incomeMainCategories = getIncomeMainCategories();
   const directions = ["הוצאה", "הכנסה"];
   const recurrences = ["", "חודשי/מזדמן", "שנתי", "דו-חודשי", "רבעוני", "חלוקת הסכום ב X"];
-  const maxRows = Math.max(allMainCategories.length, allSubCategories.length, directions.length, recurrences.length);
+  const maxRows = Math.max(
+    directions.length,
+    recurrences.length,
+    expenseMainCategories.length,
+    incomeMainCategories.length,
+  );
 
-  sheet.addRow(["סעיף ראשי", "שם סעיף", "הוצאה/הכנסה", "מחזוריות"]);
+  sheet.addRow([
+    "הוצאה/הכנסה",
+    "מחזוריות",
+    "סעיפי הוצאה",
+    "סעיפי הכנסה",
+  ]);
 
   for (let index = 0; index < maxRows; index += 1) {
     sheet.addRow([
-      allMainCategories[index] ?? "",
-      allSubCategories[index] ?? "",
       directions[index] ?? "",
       recurrences[index] ?? "",
+      expenseMainCategories[index] ?? "",
+      incomeMainCategories[index] ?? "",
     ]);
   }
 
-  workbook.definedNames.add("'בחירות'!$A$2:$A$" + (allMainCategories.length + 1), "MainCategoryList");
-  workbook.definedNames.add("'בחירות'!$B$2:$B$" + (allSubCategories.length + 1), "SubCategoryList");
-  workbook.definedNames.add("'בחירות'!$D$2:$D$" + (recurrences.length + 1), "RecurrenceList");
-}
-
-function getAllMainCategories() {
-  return [...new Set([...getExpenseMainCategories(), ...getIncomeMainCategories()])];
-}
-
-function getAllSubCategories() {
-  return [...new Set([...getExpenseSubCategories(), ...getIncomeSubCategories()])];
+  workbook.definedNames.add("'בחירות'!$C$2:$C$" + (expenseMainCategories.length + 1), "ExpenseMainCategoryList");
+  workbook.definedNames.add("'בחירות'!$D$2:$D$" + (incomeMainCategories.length + 1), "IncomeMainCategoryList");
+  workbook.definedNames.add("'בחירות'!$B$2:$B$" + (recurrences.length + 1), "RecurrenceList");
 }
 
 function getExpenseMainCategories() {
-  return [...new Set([...categorySheetRows[0].slice(0, 16).filter(Boolean), "לא לסיווג"])];
+  return getCategoryGroups(0, 16).map((group) => group.mainCategory);
 }
 
 function getIncomeMainCategories() {
-  return [...new Set([...categorySheetRows[0].slice(16, 18).filter(Boolean), "לא לסיווג"])];
+  return getCategoryGroups(16, 19).map((group) => group.mainCategory);
 }
 
 function getExpenseSubCategories() {
-  return getSubCategories(0, 16);
+  return getCategoryGroups(0, 16).flatMap((group) => group.subCategories);
 }
 
 function getIncomeSubCategories() {
-  return getSubCategories(16, 18);
+  return getCategoryGroups(16, 19).flatMap((group) => group.subCategories);
 }
 
-function getSubCategories(startColumn: number, endColumn: number) {
-  const values = categorySheetRows
-    .slice(1)
-    .flatMap((row) => row.slice(startColumn, endColumn))
-    .filter(Boolean);
-  return [...new Set([...values, "לא לסיווג"])];
+function getCategoryGroups(startColumn: number, endColumn: number): CategoryGroup[] {
+  return categoryCatalog.slice(startColumn, endColumn);
 }
 
-function sumCategories(categories: string[], totalsBySubCategory: Map<string, number>) {
-  return categories.reduce((sum, category) => sum + (totalsBySubCategory.get(category) ?? 0), 0);
+function buildCategorySheetRows() {
+  const maxSubCategoryCount = Math.max(...categoryCatalog.map((group) => group.subCategories.length));
+  return [
+    categoryCatalog.map((group) => group.mainCategory),
+    ...Array.from({ length: maxSubCategoryCount }, (_, index) =>
+      categoryCatalog.map((group) => group.subCategories[index] ?? ""),
+    ),
+  ];
 }
 
 function sanitizeWorkbookForExcel(workbook: ExcelJS.Workbook) {
