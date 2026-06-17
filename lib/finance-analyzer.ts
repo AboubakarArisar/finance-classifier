@@ -176,8 +176,11 @@ export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Pro
   const uploadsDir = path.join(jobDir, "uploads");
   await mkdir(uploadsDir, { recursive: true });
 
-  for (const file of files) {
-    await writeFile(path.join(uploadsDir, `${file.kind}-${sanitizeFileName(file.fileName)}`), file.buffer);
+  for (const [index, file] of files.entries()) {
+    await writeFile(
+      path.join(uploadsDir, `${index + 1}-${file.kind}-${sanitizeFileName(file.fileName)}`),
+      file.buffer,
+    );
   }
 
   const mappings = await loadMappings();
@@ -531,14 +534,15 @@ function classifyBySourceCategory(sourceCategory: string) {
 
 async function buildReportWorkbook(transactions: NormalizedTransaction[], summaries: ParsedSheetSummary[]) {
   const sortedTransactions = transactions.slice().sort((left, right) => compareDateText(left.date, right.date));
+  const monthCount = Math.max(1, countDistinctMonths(sortedTransactions));
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Finance Classifier";
   workbook.created = new Date();
   workbook.calcProperties = { fullCalcOnLoad: true };
   workbook.views = [{ activeTab: 0, firstSheet: 0, height: 12000, visibility: "visible", width: 20000, x: 0, y: 0 }];
 
-  appendExcelClassificationSheet(workbook, sortedTransactions);
-  appendExcelResultSheet(workbook);
+  appendExcelClassificationSheet(workbook, sortedTransactions, monthCount);
+  appendExcelResultSheet(workbook, sortedTransactions, monthCount);
   appendExcelSummarySheet(workbook, summaries);
   appendExcelCategorySheet(workbook);
   appendExcelImportSheet(workbook, sortedTransactions);
@@ -570,6 +574,32 @@ function getRecurrenceMonthDivisor(recurrence: string, monthCount: number) {
 
   const numericValue = Number.parseFloat(normalized);
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : monthCount;
+}
+
+function transactionMonthlyAverage(transaction: NormalizedTransaction, monthCount: number) {
+  const divisor = getRecurrenceMonthDivisor(transaction.recurrence, monthCount);
+  return divisor > 0 ? transaction.amount / divisor : 0;
+}
+
+function computeSubCategoryAverages(transactions: NormalizedTransaction[], monthCount: number) {
+  const averages = new Map<string, number>();
+
+  for (const transaction of transactions) {
+    if (!transaction.subCategory) {
+      continue;
+    }
+
+    averages.set(
+      transaction.subCategory,
+      (averages.get(transaction.subCategory) ?? 0) + transactionMonthlyAverage(transaction, monthCount),
+    );
+  }
+
+  return averages;
+}
+
+function sumCategoryAverages(categories: string[], averages: Map<string, number>) {
+  return categories.reduce((sum, category) => sum + (averages.get(category) ?? 0), 0);
 }
 
 function countDuplicateTransaction(transactions: NormalizedTransaction[], target: NormalizedTransaction) {
@@ -608,19 +638,25 @@ function appendExcelSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSh
   styleHeaderRow(sheet.getRow(2));
 }
 
-function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
+function appendExcelClassificationSheet(
+  workbook: ExcelJS.Workbook,
+  transactions: NormalizedTransaction[],
+  monthCount: number,
+) {
   const sheet = workbook.addWorksheet("סיווג תנועות", {
     views: [{ activeCell: "G9", rightToLeft: true, state: "frozen", ySplit: 8 }],
   });
   const lastRow = transactions.length + 8;
-  const monthCount = Math.max(1, countDistinctMonths(transactions));
+  const averages = computeSubCategoryAverages(transactions, monthCount);
+  const totalExpense = sumCategoryAverages(getExpenseSubCategories(), averages);
+  const totalIncome = sumCategoryAverages(getIncomeSubCategories(), averages);
 
   sheet.addRows([
     ["שם המשפחה", "ישראלי"],
     ["תקופת השיקוף", monthCount],
-    ["ממוצע הוצאות בחודש", { formula: "'תוצאות השיקוף'!B2" }],
-    ["ממוצע הכנסות בחודש", { formula: "'תוצאות השיקוף'!E2" }],
-    ["מאזן חודשי", { formula: "B4-B3" }],
+    ["ממוצע הוצאות בחודש", { formula: "'תוצאות השיקוף'!B1", result: totalExpense }],
+    ["ממוצע הכנסות בחודש", { formula: "'תוצאות השיקוף'!E1", result: totalIncome }],
+    ["מאזן חודשי", { formula: "B4-B3", result: totalIncome - totalExpense }],
     ["שימו לב! ניתן לבחור ולתקן סעיף ראשי, שם סעיף והוצאה/הכנסה בעזרת הרשימות הנפתחות."],
     ["תנועות מתוך דפי בנק וכרטיסי אשראי"],
     classificationHeaders,
@@ -642,6 +678,7 @@ function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions
       "",
       {
         formula: `IFERROR(IF(OR(F${rowNumber}="",F${rowNumber}="חודשי/מזדמן"),D${rowNumber}/$B$2,IF(F${rowNumber}="שנתי",D${rowNumber}/12,IF(F${rowNumber}="דו-חודשי",D${rowNumber}/2,IF(F${rowNumber}="רבעוני",D${rowNumber}/3,IF(ISNUMBER(F${rowNumber}),D${rowNumber}/F${rowNumber},D${rowNumber}))))),0)`,
+        result: transactionMonthlyAverage(transaction, monthCount),
       },
       getRecurrenceMonthDivisor(transaction.recurrence, monthCount),
       countDuplicateTransaction(transactions, transaction),
@@ -714,33 +751,44 @@ function appendExcelClassificationSheet(workbook: ExcelJS.Workbook, transactions
   }
 }
 
-function appendExcelResultSheet(workbook: ExcelJS.Workbook) {
+function appendExcelResultSheet(
+  workbook: ExcelJS.Workbook,
+  transactions: NormalizedTransaction[],
+  monthCount: number,
+) {
   const sheet = workbook.addWorksheet("תוצאות השיקוף", {
     views: [{ rightToLeft: true }],
   });
   const expenseSubCategories = getExpenseSubCategories();
   const incomeSubCategories = getIncomeSubCategories();
   const maxRows = Math.max(expenseSubCategories.length, incomeSubCategories.length);
+  const averages = computeSubCategoryAverages(transactions, monthCount);
+  const totalExpense = sumCategoryAverages(expenseSubCategories, averages);
+  const totalIncome = sumCategoryAverages(incomeSubCategories, averages);
+
+  // The three rows below are written first, so the per-category data starts on row 4.
+  const firstDataRow = 4;
+  const lastDataRow = maxRows + firstDataRow - 1;
 
   sheet.addRows([
-    ["סה\"כ הוצאות", { formula: `SUM(B5:B${maxRows + 4})` }, "", "סה\"כ הכנסות", { formula: `SUM(E5:E${maxRows + 4})` }, "", "הפרש", { formula: "E2-B2" }],
+    ["סה\"כ הוצאות", { formula: `SUM(B${firstDataRow}:B${lastDataRow})`, result: totalExpense }, "", "סה\"כ הכנסות", { formula: `SUM(E${firstDataRow}:E${lastDataRow})`, result: totalIncome }, "", "הפרש", { formula: "E1-B1", result: totalIncome - totalExpense }],
     [],
     ["קטגוריות הוצאה", "ממוצע חודשי", "", "קטגוריות הכנסה", "ממוצע חודשי"],
   ]);
 
   for (let index = 0; index < maxRows; index += 1) {
-    const rowNumber = index + 5;
+    const rowNumber = index + firstDataRow;
     const expenseCategory = expenseSubCategories[index] ?? "";
     const incomeCategory = incomeSubCategories[index] ?? "";
     sheet.addRow([
       expenseCategory,
       expenseCategory
-        ? { formula: `SUMIF('סיווג תנועות'!$H$9:$H$1499,A${rowNumber},'סיווג תנועות'!$N$9:$N$1499)` }
+        ? { formula: `SUMIF('סיווג תנועות'!$H$9:$H$1499,A${rowNumber},'סיווג תנועות'!$N$9:$N$1499)`, result: averages.get(expenseCategory) ?? 0 }
         : "",
       "",
       incomeCategory,
       incomeCategory
-        ? { formula: `SUMIF('סיווג תנועות'!$H$9:$H$1499,D${rowNumber},'סיווג תנועות'!$N$9:$N$1499)` }
+        ? { formula: `SUMIF('סיווג תנועות'!$H$9:$H$1499,D${rowNumber},'סיווג תנועות'!$N$9:$N$1499)`, result: averages.get(incomeCategory) ?? 0 }
         : "",
     ]);
   }
@@ -751,7 +799,7 @@ function appendExcelResultSheet(workbook: ExcelJS.Workbook) {
     sheet.getCell(cellAddress).numFmt = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
     sheet.getCell(cellAddress).font = { bold: true };
   });
-  for (let rowNumber = 5; rowNumber <= maxRows + 4; rowNumber += 1) {
+  for (let rowNumber = firstDataRow; rowNumber <= lastDataRow; rowNumber += 1) {
     sheet.getCell(`B${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
     sheet.getCell(`E${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
   }

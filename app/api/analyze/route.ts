@@ -6,7 +6,7 @@ const requiredFiles: { field: string; kind: UploadKind; label: string }[] = [
   { field: "creditFile", kind: "credit", label: "קובץ כרטיסי אשראי" },
   { field: "bankFile", kind: "bank", label: "קובץ חשבון בנק" },
 ];
-const maxFilesPerGroup = 6;
+const maxFilesPerGroup = 60;
 
 export async function POST(request: Request) {
   try {
@@ -18,11 +18,11 @@ export async function POST(request: Request) {
           .filter((value): value is File => value instanceof File && value.size > 0);
 
         if (values.length === 0) {
-          throw new Error(`חסר ${requiredFile.label}. יש להעלות בין 1 ל-6 קבצי Excel.`);
+          throw new Error(`חסר ${requiredFile.label}. יש להעלות לפחות קובץ Excel אחד.`);
         }
 
         if (values.length > maxFilesPerGroup) {
-          throw new Error(`${requiredFile.label} מוגבל ל-6 קבצי Excel לכל היותר.`);
+          throw new Error(`${requiredFile.label} מוגבל ל-${maxFilesPerGroup} קבצי Excel לכל היותר.`);
         }
 
         return Promise.all(

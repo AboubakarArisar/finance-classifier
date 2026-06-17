@@ -12,16 +12,16 @@ type AnalyzeResponse = {
   rowCount: number;
 };
 
-const maxFilesPerGroup = 6;
+const maxFilesPerGroup = 60;
 
 const uploadCards: Record<UploadKey, { description: string; label: string; step: string }> = {
   creditFile: {
-    description: "ניתן לבחור 1 עד 6 קבצי Excel, קובץ אחד לכל חודש, ללא פרטי כרטיס מלאים.",
+    description: "ניתן לצרף את כל קבצי כרטיסי האשראי – לכל כרטיס ולכל חודש קובץ נפרד. הקבצים מצטברים, ולא מוחקים זה את זה.",
     label: "פירוט כרטיסי אשראי",
     step: "שלב 1",
   },
   bankFile: {
-    description: "ניתן לבחור 1 עד 6 קבצי Excel של חשבון הבנק, קובץ אחד לכל חודש.",
+    description: "ניתן לצרף את כל קבצי חשבון הבנק, קובץ אחד לכל חודש. הקבצים מצטברים, ולא מוחקים זה את זה.",
     label: "פירוט חשבון בנק",
     step: "שלב 2",
   },
@@ -30,6 +30,10 @@ const uploadCards: Record<UploadKey, { description: string; label: string; step:
 function isExcelFile(file: File) {
   const name = file.name.toLowerCase();
   return name.endsWith(".xls") || name.endsWith(".xlsx") || name.endsWith(".xlsm");
+}
+
+function fileKey(file: File) {
+  return `${file.name}-${file.size}-${file.lastModified}`;
 }
 
 export default function Home() {
@@ -49,29 +53,43 @@ export default function Home() {
 
   function handleFileChange(key: UploadKey, event: ChangeEvent<HTMLInputElement>) {
     const selectedFiles = Array.from(event.target.files ?? []);
+    // Always clear the native input so re-selecting the same file fires onChange again
+    // and so each selection is appended rather than replacing the previous ones.
+    event.target.value = "";
     setResult(null);
 
     if (selectedFiles.length === 0) {
-      setFiles((current) => ({ ...current, [key]: [] }));
-      return;
-    }
-
-    if (selectedFiles.length > maxFilesPerGroup) {
-      event.target.value = "";
-      setError("ניתן להעלות עד 6 קבצי Excel בכל קטגוריה.");
-      setFiles((current) => ({ ...current, [key]: [] }));
       return;
     }
 
     if (selectedFiles.some((file) => !isExcelFile(file))) {
-      event.target.value = "";
       setError("ניתן להעלות קבצי Excel בלבד: XLS, XLSX או XLSM.");
-      setFiles((current) => ({ ...current, [key]: [] }));
       return;
     }
 
+    setFiles((current) => {
+      const existing = current[key];
+      const existingKeys = new Set(existing.map(fileKey));
+      const additions = selectedFiles.filter((file) => !existingKeys.has(fileKey(file)));
+      const merged = [...existing, ...additions];
+
+      if (merged.length > maxFilesPerGroup) {
+        setError(`ניתן להעלות עד ${maxFilesPerGroup} קבצי Excel בכל קטגוריה.`);
+        return current;
+      }
+
+      setError("");
+      return { ...current, [key]: merged };
+    });
+  }
+
+  function removeFile(key: UploadKey, target: File) {
+    setResult(null);
     setError("");
-    setFiles((current) => ({ ...current, [key]: selectedFiles }));
+    setFiles((current) => ({
+      ...current,
+      [key]: current[key].filter((file) => fileKey(file) !== fileKey(target)),
+    }));
   }
 
   async function submitFiles(event: FormEvent<HTMLFormElement>) {
@@ -149,7 +167,7 @@ export default function Home() {
               סיווג פעולות פיננסיות מקבצי Excel
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-[#59645e]">
-              העלו עד שישה חודשי בנק ועד שישה חודשי כרטיסי אשראי. המערכת תחזיר קובץ Excel מסווג להורדה.
+              צרפו את כל קובצי הבנק וכרטיסי האשראי – לכל כרטיס ולכל חודש קובץ נפרד. המערכת תחזיר קובץ Excel מסווג להורדה.
             </p>
           </div>
           <span className="inline-flex h-11 items-center border border-[#aeb7ae] bg-white px-4 text-sm font-semibold text-[#33443d]">
@@ -166,7 +184,7 @@ export default function Home() {
                   <h2 className="mt-1 text-2xl font-semibold">בחרו את קבצי החודשים</h2>
                 </div>
                 <span className="border border-[#d7d6cc] px-3 py-1 text-xs font-semibold text-[#477061]">
-                  עד 6 לכל סוג
+                  ריבוי כרטיסים נתמך
                 </span>
               </div>
 
@@ -194,13 +212,27 @@ export default function Home() {
                         type="file"
                       />
                       <span className="inline-flex min-h-11 w-full items-center justify-center border border-[#1d2521] px-4 text-center text-sm font-semibold">
-                        {files[key].length > 0 ? `נבחרו ${files[key].length} קבצים` : "בחירת קבצים"}
+                        {files[key].length > 0 ? `הוספת קבצים (${files[key].length} נבחרו)` : "בחירת קבצים"}
                       </span>
                       {files[key].length > 0 ? (
                         <span className="mt-3 grid gap-1 text-xs leading-5 text-[#59645e]">
                           {files[key].map((file) => (
-                            <span className="truncate" key={`${key}-${file.name}`}>
-                              {file.name}
+                            <span
+                              className="flex items-center justify-between gap-2 border border-[#ecece4] bg-white px-2 py-1"
+                              key={`${key}-${fileKey(file)}`}
+                            >
+                              <span className="truncate">{file.name}</span>
+                              <button
+                                aria-label={`הסר ${file.name}`}
+                                className="shrink-0 px-1 font-bold text-[#9b2f2f] hover:text-[#6f1f1f]"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  removeFile(key, file);
+                                }}
+                                type="button"
+                              >
+                                ✕
+                              </button>
                             </span>
                           ))}
                         </span>
@@ -269,7 +301,7 @@ export default function Home() {
             <p className="text-sm font-semibold text-[#477061]">איך זה עובד</p>
             <h2 className="mt-1 text-2xl font-semibold">תהליך עיבוד</h2>
             <div className="mt-5 grid gap-4 text-sm leading-7 text-[#59645e]">
-              <p>כל לקוח יכול להעלות עד 6 קבצי בנק ועד 6 קבצי כרטיסי אשראי, כאשר כל קובץ מייצג חודש אחד.</p>
+              <p>ניתן לצרף קבצים של מספר כרטיסי אשראי וחשבונות בנק. כל קובץ מייצג חודש אחד של כרטיס או חשבון, והקבצים מצטברים זה לזה.</p>
               <p>הסיווג מבוסס על קובץ מיפוי פנימי בשם category-mapping.xlsx, עם עמודות keyword, category ו-status.</p>
               <p>פעולות שלא נמצאה עבורן מילת מפתח מסומנות אוטומטית כלא מסווגות ונשלחות לבדיקה.</p>
             </div>
