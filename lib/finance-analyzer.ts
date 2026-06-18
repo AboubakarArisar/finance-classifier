@@ -357,7 +357,9 @@ function parseCreditSheet(
         chargeCurrency: readRowText(row, indexes.chargeCurrency) || "₪",
         date: formatDateText(readRowText(row, indexes.date)),
         description,
-        direction: amount < 0 ? "הכנסה" : classification.direction,
+        // A negative credit-card amount is a refund (income); otherwise trust an
+        // explicit mapping direction, falling back to expense.
+        direction: amount < 0 ? "הכנסה" : (classification.direction ?? "הוצאה"),
         installmentNote: note.includes("תשלום") ? note : "",
         mainCategory: classification.mainCategory,
         note,
@@ -496,7 +498,10 @@ function classifyTransaction(
 
   if (match) {
     return {
-      direction: match.direction ?? (amount < 0 ? "הכנסה" : "הוצאה"),
+      // Only an explicit mapping direction is a definitive signal. When the rule
+      // has none, leave it undefined so the caller can use its own signal
+      // (the bank debit/credit column, or the credit-card amount sign).
+      direction: match.direction,
       mainCategory: match.mainCategory,
       recurrence: match.recurrence ?? "",
       subCategory: match.subCategory,
@@ -505,7 +510,7 @@ function classifyTransaction(
 
   const categoryFallback = classifyBySourceCategory(sourceCategory);
   return {
-    direction: amount < 0 ? ("הכנסה" as const) : ("הוצאה" as const),
+    direction: undefined as "הוצאה" | "הכנסה" | undefined,
     mainCategory: categoryFallback?.mainCategory ?? "",
     recurrence: "",
     subCategory: categoryFallback?.subCategory ?? "",
@@ -576,9 +581,37 @@ function getRecurrenceMonthDivisor(recurrence: string, monthCount: number) {
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : monthCount;
 }
 
-function transactionMonthlyAverage(transaction: NormalizedTransaction, monthCount: number) {
-  const divisor = getRecurrenceMonthDivisor(transaction.recurrence, monthCount);
-  return divisor > 0 ? transaction.amount / divisor : 0;
+// Mirrors the reference template's column-N formula:
+//   IF(OR(F=monthly,F="",F=0), D/months,
+//      IF(OR(F=yearly,F=bi-monthly,F=quarterly), D/(divisor*occurrences), D/divisor))
+// Recurring (yearly/bi-monthly/quarterly) items are divided by the number of
+// occurrences as well, so the same recurring obligation appearing on several
+// rows is counted once rather than multiplied.
+function transactionMonthlyAverage(
+  transaction: NormalizedTransaction,
+  monthCount: number,
+  occurrences: number,
+) {
+  const recurrence = transaction.recurrence.trim();
+
+  if (!recurrence || recurrence === "חודשי/מזדמן") {
+    return monthCount > 0 ? transaction.amount / monthCount : 0;
+  }
+
+  if (recurrence === "שנתי") {
+    return occurrences > 0 ? transaction.amount / (12 * occurrences) : 0;
+  }
+
+  if (recurrence === "דו-חודשי") {
+    return occurrences > 0 ? transaction.amount / (2 * occurrences) : 0;
+  }
+
+  if (recurrence === "רבעוני") {
+    return occurrences > 0 ? transaction.amount / (3 * occurrences) : 0;
+  }
+
+  const customDivisor = Number.parseFloat(recurrence);
+  return Number.isFinite(customDivisor) && customDivisor > 0 ? transaction.amount / customDivisor : 0;
 }
 
 function computeSubCategoryAverages(transactions: NormalizedTransaction[], monthCount: number) {
@@ -589,9 +622,11 @@ function computeSubCategoryAverages(transactions: NormalizedTransaction[], month
       continue;
     }
 
+    const occurrences = countDuplicateTransaction(transactions, transaction);
     averages.set(
       transaction.subCategory,
-      (averages.get(transaction.subCategory) ?? 0) + transactionMonthlyAverage(transaction, monthCount),
+      (averages.get(transaction.subCategory) ?? 0) +
+        transactionMonthlyAverage(transaction, monthCount, occurrences),
     );
   }
 
@@ -662,6 +697,7 @@ function appendExcelClassificationSheet(
     classificationHeaders,
     ...transactions.map((transaction, index) => {
       const rowNumber = index + 9;
+      const occurrences = countDuplicateTransaction(transactions, transaction);
       return [
       transaction.sourceName,
       transaction.date,
@@ -677,14 +713,35 @@ function appendExcelClassificationSheet(
       transaction.cardOrAccount,
       "",
       {
-        formula: `IFERROR(IF(OR(F${rowNumber}="",F${rowNumber}="חודשי/מזדמן"),D${rowNumber}/$B$2,IF(F${rowNumber}="שנתי",D${rowNumber}/12,IF(F${rowNumber}="דו-חודשי",D${rowNumber}/2,IF(F${rowNumber}="רבעוני",D${rowNumber}/3,IF(ISNUMBER(F${rowNumber}),D${rowNumber}/F${rowNumber},D${rowNumber}))))),0)`,
-        result: transactionMonthlyAverage(transaction, monthCount),
+        formula: `IFERROR(IF(OR(F${rowNumber}=$P$1,F${rowNumber}="",F${rowNumber}=0),D${rowNumber}/$B$2,IF(OR(F${rowNumber}=$P$2,F${rowNumber}=$P$3,F${rowNumber}=$P$4),D${rowNumber}/(O${rowNumber}*P${rowNumber}),D${rowNumber}/O${rowNumber})),0)`,
+        result: transactionMonthlyAverage(transaction, monthCount, occurrences),
       },
-      getRecurrenceMonthDivisor(transaction.recurrence, monthCount),
-      countDuplicateTransaction(transactions, transaction),
+      {
+        formula: `IFERROR(VLOOKUP(F${rowNumber},$P$1:$Q$4,2,0),F${rowNumber})`,
+        result: getRecurrenceMonthDivisor(transaction.recurrence, monthCount),
+      },
+      {
+        formula: `IF(C${rowNumber}="",1,COUNTIFS($C$9:$C$1499,C${rowNumber},$H$9:$H$1499,H${rowNumber}))`,
+        result: occurrences,
+      },
       ];
     }),
   ]);
+
+  // Recurrence -> month-divisor lookup table used by columns N and O (matches the
+  // reference template's $P$1:$Q$4). Lives above the data area in the unused P/Q columns.
+  ([
+    ["P1", "חודשי/מזדמן"],
+    ["P2", "שנתי"],
+    ["P3", "דו-חודשי"],
+    ["P4", "רבעוני"],
+  ] as const).forEach(([address, label]) => {
+    sheet.getCell(address).value = label;
+  });
+  sheet.getCell("Q1").value = { formula: "B2", result: monthCount };
+  sheet.getCell("Q2").value = 12;
+  sheet.getCell("Q3").value = 2;
+  sheet.getCell("Q4").value = 3;
 
   sheet.columns = [
     { width: 14 },
