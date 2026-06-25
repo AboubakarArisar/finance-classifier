@@ -1,24 +1,39 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f7f7f4;
-  --foreground: #1f2522;
-}
+/* Charcoal & orange palette. */
+@theme {
+  --color-bg: #f7f7f6;
+  --color-surface: #ffffff;
+  --color-text: #4b5563;
+  --color-text-strong: #111827;
+  --color-text-muted: #9ca3af;
+  --color-primary: #1f2937;
+  --color-primary-hover: #111827;
+  --color-accent: #ea580c;
+  --color-accent-hover: #c2410c;
+  --color-success: #16a34a;
+  --color-info: #2563eb;
+  --color-danger: #dc2626;
+  --color-border: #d6d3d1;
+  --color-table-head: #f1f0ee;
+  --color-row-alt: #faf9f8;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: Arial, Helvetica, sans-serif;
-  --font-mono: "Courier New", Courier, monospace;
+  --radius-card: 8px;
+  --radius-pill: 30px;
+
+  --shadow-card: 0px 0px 10px 0px rgba(0, 0, 0, 0.05);
+
+  --font-sans: "Heebo", system-ui, -apple-system, sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }

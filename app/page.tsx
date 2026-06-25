@@ -1,8 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useMemo, useState } from "react";
-
-type UploadKey = "creditFile" | "bankFile";
+import { ChangeEvent, DragEvent, FormEvent, useMemo, useState } from "react";
 
 type AnalyzeResponse = {
   downloadUrl: string;
@@ -12,20 +10,7 @@ type AnalyzeResponse = {
   rowCount: number;
 };
 
-const maxFilesPerGroup = 60;
-
-const uploadCards: Record<UploadKey, { description: string; label: string; step: string }> = {
-  creditFile: {
-    description: "ניתן לצרף את כל קבצי כרטיסי האשראי – לכל כרטיס ולכל חודש קובץ נפרד. הקבצים מצטברים, ולא מוחקים זה את זה.",
-    label: "פירוט כרטיסי אשראי",
-    step: "שלב 1",
-  },
-  bankFile: {
-    description: "ניתן לצרף את כל קבצי חשבון הבנק, קובץ אחד לכל חודש. הקבצים מצטברים, ולא מוחקים זה את זה.",
-    label: "פירוט חשבון בנק",
-    step: "שלב 2",
-  },
-};
+const maxFiles = 120;
 
 function isExcelFile(file: File) {
   const name = file.name.toLowerCase();
@@ -36,83 +21,97 @@ function fileKey(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}`;
 }
 
+// Best-effort label from the file name; the server still auto-detects the real type.
+function paymentMethod(file: File) {
+  const name = file.name;
+  if (/אשראי|סקיי|כרטיס|מסטרקארד|ויזה|כאל|מקס|ישראכרט|אמריקן|דיינרס|פירוט עסקאות/.test(name)) {
+    return "כרטיס אשראי";
+  }
+  if (/בנק|עו"?ש|עובר ושב|חשבון|תנועות בחשבון/.test(name)) {
+    return "חשבון בנק";
+  }
+  return "—";
+}
+
 export default function Home() {
-  const [files, setFiles] = useState<Record<UploadKey, File[]>>({
-    bankFile: [],
-    creditFile: [],
-  });
+  const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState("");
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formVersion, setFormVersion] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [inputVersion, setInputVersion] = useState(0);
 
-  const canSubmit = useMemo(
-    () => files.creditFile.length > 0 && files.bankFile.length > 0,
-    [files],
-  );
+  const canSubmit = useMemo(() => files.length > 0 && !isSubmitting, [files, isSubmitting]);
 
-  function handleFileChange(key: UploadKey, event: ChangeEvent<HTMLInputElement>) {
-    const selectedFiles = Array.from(event.target.files ?? []);
-    // Always clear the native input so re-selecting the same file fires onChange again
-    // and so each selection is appended rather than replacing the previous ones.
-    event.target.value = "";
+  function addFiles(incoming: File[]) {
     setResult(null);
 
-    if (selectedFiles.length === 0) {
+    if (incoming.length === 0) {
       return;
     }
 
-    if (selectedFiles.some((file) => !isExcelFile(file))) {
+    if (incoming.some((file) => !isExcelFile(file))) {
       setError("ניתן להעלות קבצי Excel בלבד: XLS, XLSX או XLSM.");
       return;
     }
 
     setFiles((current) => {
-      const existing = current[key];
-      const existingKeys = new Set(existing.map(fileKey));
-      const additions = selectedFiles.filter((file) => !existingKeys.has(fileKey(file)));
-      const merged = [...existing, ...additions];
+      const existing = new Set(current.map(fileKey));
+      const merged = [...current, ...incoming.filter((file) => !existing.has(fileKey(file)))];
 
-      if (merged.length > maxFilesPerGroup) {
-        setError(`ניתן להעלות עד ${maxFilesPerGroup} קבצי Excel בכל קטגוריה.`);
+      if (merged.length > maxFiles) {
+        setError(`ניתן להעלות עד ${maxFiles} קבצי Excel.`);
         return current;
       }
 
       setError("");
-      return { ...current, [key]: merged };
+      return merged;
     });
   }
 
-  function removeFile(key: UploadKey, target: File) {
+  function handleInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    addFiles(selected);
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    addFiles(Array.from(event.dataTransfer.files ?? []));
+  }
+
+  function removeFile(target: File) {
     setResult(null);
     setError("");
-    setFiles((current) => ({
-      ...current,
-      [key]: current[key].filter((file) => fileKey(file) !== fileKey(target)),
-    }));
+    setFiles((current) => current.filter((file) => fileKey(file) !== fileKey(target)));
+  }
+
+  function resetForm() {
+    setFiles([]);
+    setError("");
+    setResult(null);
+    setIsSubmitting(false);
+    setInputVersion((current) => current + 1);
   }
 
   async function submitFiles(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!canSubmit) {
-      setError("יש להעלות לפחות קובץ אחד של כרטיסי אשראי ולפחות קובץ אחד של חשבון בנק.");
+    if (files.length === 0) {
+      setError("יש להעלות לפחות קובץ Excel אחד.");
       return;
     }
 
     const formData = new FormData();
-    files.creditFile.forEach((file) => formData.append("creditFile", file));
-    files.bankFile.forEach((file) => formData.append("bankFile", file));
+    files.forEach((file) => formData.append("files", file));
 
     setError("");
     setResult(null);
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/analyze", {
-        body: formData,
-        method: "POST",
-      });
+      const response = await fetch("/api/analyze", { body: formData, method: "POST" });
       const payload = await response.json();
 
       if (!response.ok) {
@@ -143,189 +142,146 @@ export default function Home() {
     link.download = result.fileName;
     link.click();
     URL.revokeObjectURL(url);
-    resetForm();
-  }
-
-  function resetForm() {
-    setFiles({
-      bankFile: [],
-      creditFile: [],
-    });
-    setError("");
-    setResult(null);
-    setIsSubmitting(false);
-    setFormVersion((current) => current + 1);
   }
 
   return (
-    <main className="min-h-screen bg-[#f6f4ef] text-[#1d2521]" dir="rtl">
-      <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 py-6 sm:px-8 lg:px-10">
-        <header className="flex flex-col gap-4 border-b border-[#d7d6cc] pb-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="max-w-3xl">
-            <p className="text-sm font-semibold text-[#477061]">Benny Finance Classifier</p>
-            <h1 className="mt-2 text-3xl font-semibold leading-tight text-[#17211d] sm:text-5xl">
-              סיווג פעולות פיננסיות מקבצי Excel
-            </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-[#59645e]">
-              צרפו את כל קובצי הבנק וכרטיסי האשראי – לכל כרטיס ולכל חודש קובץ נפרד. המערכת תחזיר קובץ Excel מסווג להורדה.
-            </p>
-          </div>
-          <span className="inline-flex h-11 items-center border border-[#aeb7ae] bg-white px-4 text-sm font-semibold text-[#33443d]">
-            קובץ אחד לכל חודש
-          </span>
+    <main className="flex min-h-screen w-full justify-center px-4 py-10">
+      <section className="w-full max-w-3xl rounded-card bg-surface p-6 shadow-card sm:p-8">
+        {/* Header */}
+        <header className="flex items-center justify-between border-b border-border/60 pb-5">
+          <h1 className="text-2xl font-semibold text-text-strong sm:text-3xl">סיווג תנועות</h1>
+          <p className="text-sm font-medium text-accent">דפי בנק וכרטיסי אשראי</p>
         </header>
 
-        <div className="grid flex-1 gap-6 py-8 lg:grid-cols-[1fr_0.72fr]">
-          <form className="flex flex-col gap-5" onSubmit={submitFiles}>
-            <section className="border border-[#d7d6cc] bg-white p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-[#477061]">העלאת קבצים</p>
-                  <h2 className="mt-1 text-2xl font-semibold">בחרו את קבצי החודשים</h2>
-                </div>
-                <span className="border border-[#d7d6cc] px-3 py-1 text-xs font-semibold text-[#477061]">
-                  ריבוי כרטיסים נתמך
-                </span>
-              </div>
+        <form className="mt-6 flex flex-col gap-5" onSubmit={submitFiles}>
+          {/* Upload instruction */}
+          <p className="text-center text-sm text-text">
+            ניתן להעלות יותר מקובץ אחד
+            <span className="mx-1 font-semibold text-accent">·</span>
+            <span className="font-semibold text-accent">קבצי אקסל XLS, XLSX בלבד</span>
+          </p>
 
-              <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                {(Object.keys(uploadCards) as UploadKey[]).map((key) => (
-                  <label
-                    className="flex min-h-56 cursor-pointer flex-col justify-between border border-dashed border-[#b6beb4] bg-[#fbfaf6] p-5 transition hover:border-[#477061] hover:bg-white"
-                    key={key}
-                  >
-                    <span>
-                      <span className="text-sm font-semibold text-[#477061]">{uploadCards[key].step}</span>
-                      <span className="mt-2 block text-xl font-semibold">{uploadCards[key].label}</span>
-                      <span className="mt-2 block text-sm leading-6 text-[#626d66]">
-                        {uploadCards[key].description}
-                      </span>
-                    </span>
-                    <span className="mt-6 block">
-                      <input
-                        accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        className="sr-only"
-                        key={`${key}-${formVersion}`}
-                        multiple
-                        name={key}
-                        onChange={(event) => handleFileChange(key, event)}
-                        type="file"
-                      />
-                      <span className="inline-flex min-h-11 w-full items-center justify-center border border-[#1d2521] px-4 text-center text-sm font-semibold">
-                        {files[key].length > 0 ? `הוספת קבצים (${files[key].length} נבחרו)` : "בחירת קבצים"}
-                      </span>
-                      {files[key].length > 0 ? (
-                        <span className="mt-3 grid gap-1 text-xs leading-5 text-[#59645e]">
-                          {files[key].map((file) => (
-                            <span
-                              className="flex items-center justify-between gap-2 border border-[#ecece4] bg-white px-2 py-1"
-                              key={`${key}-${fileKey(file)}`}
-                            >
-                              <span className="truncate">{file.name}</span>
-                              <button
-                                aria-label={`הסר ${file.name}`}
-                                className="shrink-0 px-1 font-bold text-[#9b2f2f] hover:text-[#6f1f1f]"
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  removeFile(key, file);
-                                }}
-                                type="button"
-                              >
-                                ✕
-                              </button>
-                            </span>
-                          ))}
-                        </span>
-                      ) : null}
-                    </span>
-                  </label>
-                ))}
-              </div>
+          {/* Dropzone */}
+          <label
+            className={`flex cursor-pointer flex-col items-center justify-center rounded-card border-2 border-dashed px-5 py-10 text-center transition-colors ${
+              isDragging ? "border-accent bg-row-alt" : "border-border bg-bg hover:border-accent hover:bg-surface"
+            }`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={handleDrop}
+          >
+            <input
+              accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="sr-only"
+              key={inputVersion}
+              multiple
+              onChange={handleInputChange}
+              type="file"
+            />
+            <span className="text-base text-text">
+              ניתן לגרור או לבחור <span className="font-semibold text-accent">קבצים כאן</span>
+            </span>
+            <span className="mt-2 text-xs text-text-muted">לכל כרטיס ולכל חודש קובץ נפרד · הקבצים מצטברים</span>
+          </label>
 
-              {error ? (
-                <p className="mt-4 border border-[#e7c7c7] bg-[#fff7f7] px-4 py-3 text-sm font-semibold text-[#9b2f2f]">
-                  {error}
-                </p>
-              ) : null}
-
-              <button
-                className="mt-5 h-12 w-full bg-[#1d2521] px-6 text-sm font-semibold text-white transition enabled:hover:bg-[#34423b] disabled:cursor-not-allowed disabled:bg-[#aab3aa] sm:w-auto"
-                disabled={!canSubmit || isSubmitting}
-                type="submit"
-              >
-                {isSubmitting ? "מעבד קבצים..." : "התחל סיווג"}
-              </button>
-            </section>
-
-            <section className="border border-[#d7d6cc] bg-white p-5 shadow-sm">
-              <p className="text-sm font-semibold text-[#477061]">תוצאה</p>
-              <h2 className="mt-1 text-2xl font-semibold">קובץ מסווג להורדה</h2>
-
-              <div className="mt-5 bg-[#eef0ea]">
-                <div
-                  className="h-3 bg-[#477061] transition-all duration-500"
-                  style={{ width: result ? "100%" : isSubmitting ? "70%" : "0%" }}
-                />
-              </div>
-
-              <p className="mt-3 text-sm leading-6 text-[#626d66]">
-                {result
-                  ? `הסיווג הסתיים. נמצאו ${result.rowCount} תנועות בקבצים שהועלו.`
-                  : isSubmitting
-                    ? "המערכת קוראת את קבצי ה-Excel, מסווגת פעולות ומייצרת דוח."
-                    : "לאחר ההעלאה יופיע כאן קישור להורדת קובץ ה-Excel המסווג."}
-              </p>
-
-              {result ? (
-                <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-                  <button
-                    className="inline-flex h-11 items-center justify-center bg-[#477061] px-5 text-sm font-semibold text-white transition hover:bg-[#36584b]"
-                    onClick={downloadReport}
-                    type="button"
-                  >
-                    הורד דוח Excel
-                  </button>
-                  <button
-                    className="inline-flex h-11 items-center justify-center border border-[#aeb7ae] bg-white px-5 text-sm font-semibold text-[#1d2521] transition hover:border-[#1d2521]"
-                    onClick={resetForm}
-                    type="button"
-                  >
-                    סיווג חדש
-                  </button>
-                </div>
-              ) : null}
-            </section>
-          </form>
-
-          <aside className="border border-[#d7d6cc] bg-white p-5 shadow-sm">
-            <p className="text-sm font-semibold text-[#477061]">איך זה עובד</p>
-            <h2 className="mt-1 text-2xl font-semibold">תהליך עיבוד</h2>
-            <div className="mt-5 grid gap-4 text-sm leading-7 text-[#59645e]">
-              <p>ניתן לצרף קבצים של מספר כרטיסי אשראי וחשבונות בנק. כל קובץ מייצג חודש אחד של כרטיס או חשבון, והקבצים מצטברים זה לזה.</p>
-              <p>הסיווג מבוסס על קובץ מיפוי פנימי בשם category-mapping.xlsx, עם עמודות keyword, category ו-status.</p>
-              <p>פעולות שלא נמצאה עבורן מילת מפתח מסומנות אוטומטית כלא מסווגות ונשלחות לבדיקה.</p>
-            </div>
-
-            <div className="mt-6 border border-[#d7d6cc]">
+          {/* Files table */}
+          <div>
+            <h2 className="mb-2 text-lg font-semibold text-text-strong">קבצים</h2>
+            <div className="overflow-hidden rounded-card border border-border/70">
               <table className="w-full border-collapse text-right text-sm">
-                <thead className="bg-[#eef0ea] text-[#33443d]">
+                <thead className="bg-table-head text-text-strong">
                   <tr>
-                    <th className="border-b border-[#d7d6cc] p-3 font-semibold">עמודה</th>
-                    <th className="border-b border-[#d7d6cc] p-3 font-semibold">פלט</th>
+                    <th className="px-4 py-3 font-semibold">קובץ</th>
+                    <th className="px-4 py-3 font-semibold">אמצעי תשלום</th>
+                    <th className="w-12 px-4 py-3 font-semibold" aria-label="הסרה" />
                   </tr>
                 </thead>
                 <tbody>
-                  {["תאריך", "מקור", "תיאור פעולה", "סיווג", "סכום", "סטטוס"].map((column) => (
-                    <tr className="odd:bg-white even:bg-[#fbfaf6]" key={column}>
-                      <td className="border-b border-[#ecece4] p-3">{column}</td>
-                      <td className="border-b border-[#ecece4] p-3 text-[#59645e]">Excel</td>
+                  {files.length === 0 ? (
+                    <tr>
+                      <td className="px-4 py-8 text-center text-text-muted" colSpan={3}>
+                        עדיין לא נבחרו קבצים
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    files.map((file) => (
+                      <tr className="border-t border-border/40 odd:bg-surface even:bg-row-alt" key={fileKey(file)}>
+                        <td className="px-4 py-3">
+                          <span className="block truncate text-text-strong">{file.name}</span>
+                        </td>
+                        <td className="px-4 py-3 text-text">{paymentMethod(file)}</td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            aria-label={`הסר ${file.name}`}
+                            className="font-bold text-text-muted transition-colors hover:text-danger"
+                            onClick={() => removeFile(file)}
+                            type="button"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
-          </aside>
-        </div>
+          </div>
+
+          {error ? (
+            <p className="rounded-card border border-danger/40 bg-danger/5 px-4 py-3 text-sm font-medium text-danger">
+              {error}
+            </p>
+          ) : null}
+
+          {/* Progress + result */}
+          {(isSubmitting || result) && !error ? (
+            <div className="rounded-card border border-border/60 bg-bg px-4 py-4">
+              <div className="h-2 overflow-hidden rounded-pill bg-table-head">
+                <div
+                  className="h-full bg-accent transition-all duration-500"
+                  style={{ width: result ? "100%" : "70%" }}
+                />
+              </div>
+              <p className="mt-3 text-sm text-text">
+                {result
+                  ? `הסיווג הסתיים — נמצאו ${result.rowCount} תנועות.`
+                  : "המערכת קוראת את הקבצים, מסווגת פעולות ומייצרת דוח..."}
+              </p>
+            </div>
+          ) : null}
+
+          {/* Footer actions */}
+          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border/60 pt-5">
+            {result ? (
+              <button
+                className="inline-flex h-12 items-center justify-center rounded-pill bg-primary px-8 text-base font-semibold text-surface transition-colors hover:bg-primary-hover"
+                onClick={downloadReport}
+                type="button"
+              >
+                הורדת דוח Excel
+              </button>
+            ) : (
+              <button
+                className="inline-flex h-12 items-center justify-center rounded-pill bg-primary px-8 text-base font-semibold text-surface transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!canSubmit}
+                type="submit"
+              >
+                {isSubmitting ? "מעבד..." : "אישור"}
+              </button>
+            )}
+            <button
+              className="inline-flex h-12 items-center justify-center rounded-pill border border-border bg-surface px-8 text-base font-medium text-text transition-colors hover:border-primary hover:text-text-strong"
+              onClick={resetForm}
+              type="button"
+            >
+              {result ? "סיווג חדש" : "ביטול"}
+            </button>
+          </div>
+        </form>
       </section>
     </main>
   );

@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
@@ -295,11 +295,18 @@ function parseWorkbook(
       header: 1,
       raw: false,
     });
-    const creditParsed = parseCreditSheet(rows, sheetName, file, mappings, () => getNextSourceName("credit"));
-    const parsed =
-      creditParsed.transactions.length > 0
-        ? creditParsed
-        : parseBankSheet(rows, sheetName, file, mappings, () => getNextSourceName("bank"));
+    // Try each known statement layout in turn. The first one that yields rows
+    // wins, so the order only matters when a sheet could plausibly match more
+    // than one (it can't: each layout is keyed on headers unique to it).
+    let parsed = parseCreditSheet(rows, sheetName, file, mappings, () => getNextSourceName("credit"));
+
+    if (parsed.transactions.length === 0) {
+      parsed = parseIsracardSheet(rows, sheetName, file, mappings, () => getNextSourceName("credit"));
+    }
+
+    if (parsed.transactions.length === 0) {
+      parsed = parseBankSheet(rows, sheetName, file, mappings, () => getNextSourceName("bank"));
+    }
 
     if (parsed.transactions.length === 0) {
       return;
@@ -349,7 +356,9 @@ function parseCreditSheet(
 
       const note = readRowText(row, indexes.note);
       const sourceCategory = readRowText(row, indexes.category);
-      const classification = classifyTransaction(description, note, amount, mappings, sourceCategory);
+      // A negative credit-card amount is a refund (income); otherwise it's an expense.
+      const isExpense = amount >= 0;
+      const classification = classifyTransaction(description, note, isExpense, mappings, sourceCategory);
 
       return {
         amount: Math.abs(amount),
@@ -357,9 +366,7 @@ function parseCreditSheet(
         chargeCurrency: readRowText(row, indexes.chargeCurrency) || "₪",
         date: formatDateText(readRowText(row, indexes.date)),
         description,
-        // A negative credit-card amount is a refund (income); otherwise trust an
-        // explicit mapping direction, falling back to expense.
-        direction: amount < 0 ? "הכנסה" : (classification.direction ?? "הוצאה"),
+        direction: isExpense ? "הוצאה" : "הכנסה",
         installmentNote: note.includes("תשלום") ? note : "",
         mainCategory: classification.mainCategory,
         note,
@@ -417,8 +424,15 @@ function parseBankSheet(
       }
 
       const details = readRowText(row, indexes.details);
-      const direction = debit !== null ? "הוצאה" : "הכנסה";
-      const classification = classifyTransaction(description, details, amount, mappings);
+      // The debit/credit column is the authoritative direction signal for a bank line.
+      const isExpense = debit !== null;
+      // A bank line that is the aggregate credit-card settlement (e.g. "כאל",
+      // "מקס איט פיננסי") is left unclassified: its individual transactions are
+      // already counted from the card statement, so classifying it here would
+      // double-count. This mirrors the reference tool's "לא לסיווג" handling.
+      const classification = isCreditCardSettlement(description)
+        ? { mainCategory: "", recurrence: "", subCategory: "" }
+        : classifyTransaction(description, details, isExpense, mappings);
 
       return {
         amount: Math.abs(amount),
@@ -426,11 +440,83 @@ function parseBankSheet(
         chargeCurrency: "",
         date: formatDateText(readRowText(row, indexes.date)),
         description,
-        direction: classification.direction ?? direction,
+        direction: isExpense ? "הוצאה" : "הכנסה",
         installmentNote: "",
         mainCategory: classification.mainCategory,
         note: details,
         originalAmount: "",
+        recurrence: classification.recurrence,
+        sourceName: "",
+        subCategory: classification.subCategory,
+      } satisfies NormalizedTransaction;
+    })
+    .filter((row): row is NormalizedTransaction => Boolean(row));
+  const sourceName = transactions.length > 0 ? getSourceName() : "";
+  transactions.forEach((transaction) => {
+    transaction.sourceName = sourceName;
+  });
+
+  return {
+    summary: buildSummary(file.fileName, sheetName, sourceName, transactions),
+    transactions,
+  };
+}
+
+// Isracard / "פירוט עסקאות" credit-card layout (e.g. Mastercard Gold). Unlike the
+// Max layout handled by parseCreditSheet, its columns are "תאריך רכישה" / "שם בית עסק"
+// / "סכום עסקה" / "סכום חיוב" / "פירוט נוסף", and the data block ends with a
+// "סה״כ לחיוב החודש" total row that must not be counted as a transaction.
+function parseIsracardSheet(
+  rows: unknown[][],
+  sheetName: string,
+  file: UploadedWorkbook,
+  mappings: MappingRule[],
+  getSourceName: () => string,
+): ParsedSheet {
+  const headerIndex = findHeaderRowIndex(rows, ["שם בית עסק", "סכום חיוב"]);
+
+  if (headerIndex < 0) {
+    return emptyParsedSheet(file, sheetName, "");
+  }
+
+  const cardNumber = extractCardNumber(rows);
+  const headers = rows[headerIndex].map((cell) => normalizeHeader(String(cell ?? "")));
+  const indexes = {
+    amount: findHeaderIndex(headers, ["סכום חיוב"]),
+    chargeCurrency: findHeaderIndex(headers, ["מטבע חיוב"]),
+    date: findHeaderIndex(headers, ["תאריך רכישה", "תאריך עסקה"]),
+    description: findHeaderIndex(headers, ["שם בית עסק", "שם בית העסק"]),
+    note: findHeaderIndex(headers, ["פירוט נוסף", "הערות"]),
+    originalAmount: findHeaderIndex(headers, ["סכום עסקה", "סכום עסקה מקורי"]),
+  };
+
+  const transactions = rows
+    .slice(headerIndex + 1)
+    .map<NormalizedTransaction | null>((row) => {
+      const description = readRowText(row, indexes.description);
+      // Some lines carry only the original amount (e.g. a fully-discounted card
+      // fee charges 0); fall back to it so the row is still counted.
+      const amount = readRowNumber(row, indexes.amount) ?? readRowNumber(row, indexes.originalAmount);
+
+      if (!description || amount === null || isSummaryLine(description)) {
+        return null;
+      }
+
+      const note = readRowText(row, indexes.note);
+      const isExpense = amount >= 0;
+      const classification = classifyTransaction(description, note, isExpense, mappings);
+
+      return {
+        amount: Math.abs(amount),
+        cardOrAccount: cardNumber,
+        chargeCurrency: readRowText(row, indexes.chargeCurrency) || "₪",
+        date: formatDateText(readRowText(row, indexes.date)),
+        description,
+        direction: isExpense ? "הוצאה" : "הכנסה",
+        installmentNote: note.includes("תשלום") ? note : "",
+        mainCategory: classification.mainCategory,
+        note,
+        originalAmount: readRowNumber(row, indexes.originalAmount) ?? "",
         recurrence: classification.recurrence,
         sourceName: "",
         subCategory: classification.subCategory,
@@ -474,22 +560,159 @@ function buildSummary(
   };
 }
 
+type PaamonimTuple = [string, string, string, number, number];
+
+type PaamonimEntry = { category: string; expenseFlag: number; subCategory: string };
+
+type PaamonimIndex = {
+  exact: Map<string, PaamonimEntry>;
+  prefixByLength: Map<number, Map<string, PaamonimEntry>>;
+  prefixLengthsDesc: number[];
+};
+
+const paamonimMappingPath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "paamonim-mappings.json");
+let paamonimIndexCache: PaamonimIndex | null = null;
+
+// The reference database stores a handful of sub-categories with spellings that
+// differ from this template's canonical list (categoryCatalog). Left unmapped,
+// the report's SUMIF averages would silently miss those rows, so we reconcile to
+// the catalog spelling — which is also what the reference's own output displays.
+const subCategoryAliases: Record<string, string> = {
+  "טיפולי שיניים / אורתודנט": "טיפולי שיניים / אורטודנט",
+  "מיסי יישוב / ועד בית": "מיסי ישוב / ועד בית",
+  "טלוויזיה ואינטרנט (ספק ותשתית)": "טלויזיה ואינטרנט (ספק ותשתית)",
+  "עזרה ממשפחה": "עזרה למשפחה",
+  "אירועי שמחות במשפחה": "ארועי שמחות במשפחה",
+  "הכנסה מנכס או פיננסי": "הכנסה מנכס",
+};
+
+// Same normalization the reference classifier uses: trim, lower-case, collapse
+// internal whitespace. Both the database keys and the lookup query go through it.
+function normalizeClassifierKey(value: string) {
+  return value ? value.trim().toLowerCase().replace(/\s+/g, " ") : "";
+}
+
+// Rebuilds the reference tool's RuleBasedClassifier from data/paamonim-mappings.json:
+// an exact-key map plus a longest-prefix map (bucketed by key length). Built once
+// and cached for the lifetime of the process.
+function getPaamonimIndex(): PaamonimIndex {
+  if (paamonimIndexCache) {
+    return paamonimIndexCache;
+  }
+
+  const exact = new Map<string, PaamonimEntry>();
+  const prefixByLength = new Map<number, Map<string, PaamonimEntry>>();
+
+  if (existsSync(paamonimMappingPath)) {
+    const tuples = JSON.parse(readFileSync(paamonimMappingPath, "utf8")) as PaamonimTuple[];
+
+    for (const [cbValue, category, subCategory, expenseFlag, prefixFlag] of tuples) {
+      const key = normalizeClassifierKey(cbValue);
+
+      if (!key) {
+        continue;
+      }
+
+      const entry: PaamonimEntry = {
+        category,
+        expenseFlag,
+        subCategory: subCategoryAliases[subCategory] ?? subCategory,
+      };
+
+      if (prefixFlag === 1) {
+        // The reference drops single-character prefixes to avoid matching everything.
+        if (key.length <= 1) {
+          continue;
+        }
+
+        let bucket = prefixByLength.get(key.length);
+        if (!bucket) {
+          bucket = new Map();
+          prefixByLength.set(key.length, bucket);
+        }
+        if (!bucket.has(key)) {
+          bucket.set(key, entry);
+        }
+      } else if (!exact.has(key)) {
+        exact.set(key, entry);
+      }
+    }
+  }
+
+  paamonimIndexCache = {
+    exact,
+    prefixByLength,
+    prefixLengthsDesc: Array.from(prefixByLength.keys()).sort((left, right) => right - left),
+  };
+  return paamonimIndexCache;
+}
+
+// A rule applies only when its direction matches the transaction's. expenseFlag 2
+// means the rule is direction-agnostic (the reference's "isExpense === undefined").
+function matchesDirection(expenseFlag: number, isExpense: boolean) {
+  return expenseFlag === 2 || expenseFlag === (isExpense ? 1 : 0);
+}
+
+function classifyByPaamonim(description: string, isExpense: boolean) {
+  const key = normalizeClassifierKey(description);
+
+  if (!key) {
+    return null;
+  }
+
+  const index = getPaamonimIndex();
+  const exact = index.exact.get(key);
+
+  if (exact && matchesDirection(exact.expenseFlag, isExpense)) {
+    return { mainCategory: exact.category, subCategory: exact.subCategory };
+  }
+
+  // Longest prefix wins, exactly like findPrefixMapping in the reference.
+  for (const length of index.prefixLengthsDesc) {
+    if (key.length < length) {
+      continue;
+    }
+
+    const hit = index.prefixByLength.get(length)?.get(key.slice(0, length));
+
+    if (hit && matchesDirection(hit.expenseFlag, isExpense)) {
+      return { mainCategory: hit.category, subCategory: hit.subCategory };
+    }
+  }
+
+  return null;
+}
+
+// Credit-card companies as they appear as a single settlement line on a bank
+// statement. Anchored to the start so it won't catch unrelated merchants.
+const creditCardSettlementPattern =
+  /^(כא"?ל|מקס איט|מקס פיננס|ויזה כא"?ל|ישראכרט|לאומי קארד|לאומי-קארד|אמריקן אקספרס|דיינרס|דירקט|כרטיסי אשראי)/;
+
+function isCreditCardSettlement(description: string) {
+  return creditCardSettlementPattern.test(normalizeClassifierKey(description));
+}
+
 function classifyTransaction(
   description: string,
   note: string,
-  amount: number,
+  isExpense: boolean,
   mappings: MappingRule[],
   sourceCategory = "",
 ) {
+  // Multi-payment installments are left unclassified, mirroring the reference tool,
+  // which sets these aside ("שקול רישום כחוב") rather than counting them as a
+  // recurring monthly expense.
   if (/תשלום\s+\d+\s+מתוך\s+\d+/.test(note)) {
-    return {
-      direction: "הוצאה" as const,
-      mainCategory: "",
-      recurrence: "",
-      subCategory: "",
-    };
+    return { mainCategory: "", recurrence: "", subCategory: "" };
   }
 
+  // 1) Paamonim rule database — the reference engine, by far the most comprehensive.
+  const fromDatabase = classifyByPaamonim(description, isExpense);
+  if (fromDatabase) {
+    return { mainCategory: fromDatabase.mainCategory, recurrence: "", subCategory: fromDatabase.subCategory };
+  }
+
+  // 2) User-supplied keyword overrides (data/category-mapping.xlsx + fallbackRules).
   const searchable = `${description} ${note}`.toLocaleLowerCase("he-IL");
   const match = mappings
     .slice()
@@ -497,20 +720,12 @@ function classifyTransaction(
     .find((mapping) => searchable.includes(mapping.keyword.toLocaleLowerCase("he-IL")));
 
   if (match) {
-    return {
-      // Only an explicit mapping direction is a definitive signal. When the rule
-      // has none, leave it undefined so the caller can use its own signal
-      // (the bank debit/credit column, or the credit-card amount sign).
-      direction: match.direction,
-      mainCategory: match.mainCategory,
-      recurrence: match.recurrence ?? "",
-      subCategory: match.subCategory,
-    };
+    return { mainCategory: match.mainCategory, recurrence: match.recurrence ?? "", subCategory: match.subCategory };
   }
 
+  // 3) Last resort: the statement's own category column.
   const categoryFallback = classifyBySourceCategory(sourceCategory);
   return {
-    direction: undefined as "הוצאה" | "הכנסה" | undefined,
     mainCategory: categoryFallback?.mainCategory ?? "",
     recurrence: "",
     subCategory: categoryFallback?.subCategory ?? "",
@@ -1044,14 +1259,68 @@ function readRowNumber(row: unknown[], index: number) {
 }
 
 function formatDateText(value: string) {
-  const match = value.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  const fourDigitYear = value.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
 
-  if (!match) {
-    return value;
+  if (fourDigitYear) {
+    const [, day, month, year] = fourDigitYear;
+    return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`;
   }
 
-  const [, day, month, year] = match;
-  return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`;
+  // Two-digit years show up in two flavours: Isracard prints day-first dotted
+  // dates (22.03.26) while bank exports render real dates as US m/d/yy (1/30/26).
+  // Disambiguate by the obvious out-of-range field first, then by separator.
+  const twoDigitYear = value.match(/^(\d{1,2})([./-])(\d{1,2})[./-](\d{2})$/);
+
+  if (twoDigitYear) {
+    const [, first, separator, second, shortYear] = twoDigitYear;
+    const a = Number(first);
+    const b = Number(second);
+    let day: number;
+    let month: number;
+
+    if (a > 12) {
+      day = a;
+      month = b;
+    } else if (b > 12) {
+      month = a;
+      day = b;
+    } else if (separator === "/") {
+      month = a;
+      day = b;
+    } else {
+      day = a;
+      month = b;
+    }
+
+    return `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${2000 + Number(shortYear)}`;
+  }
+
+  return value;
+}
+
+function isSummaryLine(description: string) {
+  const compact = description.replace(/\s+/g, "");
+  return compact.startsWith('סה"כ') || compact.startsWith("סהכ") || compact.startsWith("סךהכל");
+}
+
+function extractCardNumber(rows: unknown[][]) {
+  // The card label lives in its own cell (e.g. "גולד - מסטרקארד - 1988"); read it
+  // per-cell so a neighbouring amount column can't swallow the trailing digits.
+  for (const row of rows.slice(0, 6)) {
+    for (const cell of row) {
+      const text = String(cell ?? "");
+
+      if (/מסטרקארד|ויזה|ישראכרט|אמריקן|דיינרס/.test(text)) {
+        const match = text.match(/(\d{3,4})(?!.*\d)/);
+
+        if (match) {
+          return match[1];
+        }
+      }
+    }
+  }
+
+  return "";
 }
 
 function compareDateText(left: string, right: string) {
