@@ -985,8 +985,11 @@ function appendExcelClassificationSheet(
     { width: 16 },
     { width: 4 },
     { width: 20 },
-    { width: 20 },
-    { width: 20 },
+    // O and P ("מס' חודשים" / "מס' מופעים") are internal helpers that feed the
+    // column-N monthly-average formula. They are hidden (not deleted — the
+    // formulas still need them) so the sheet isn't cluttered for the user.
+    { width: 20, hidden: true },
+    { width: 20, hidden: true },
   ];
   sheet.autoFilter = `A8:P${lastRow}`;
   styleHeaderRow(sheet.getRow(8));
