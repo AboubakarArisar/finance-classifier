@@ -91,6 +91,10 @@ const classificationHeaders = [
   "מס' מופעים (לשימוש פנימי)",
 ];
 
+// Special "Not for classification" label. A row tagged with this is shown to the
+// user but kept out of every expense/income total — see the catalog entry below.
+const notForClassificationLabel = "לא לסיווג";
+
 const categoryCatalog: CategoryGroup[] = [
   { mainCategory: "מזון ופארמה", namedRange: "CategorySubList_1", subCategories: ["מזון", "פארמה וטואלטיקה", "בר מים", "אוכל מוכן / בעבודה", "עישון", "מזון ופארמה - כללי"] },
   { mainCategory: "פנאי, בילוי ותחביבים", namedRange: "CategorySubList_2", subCategories: ["מסעדה ואוכל בחוץ", "ספורט", "חופשות", "בילויים ומופעים", "חיות מחמד", "חוגי מבוגרים", "בייביסיטר", "הגרלות", "פנאי - כללי"] },
@@ -111,6 +115,13 @@ const categoryCatalog: CategoryGroup[] = [
   { mainCategory: "שכר", namedRange: "CategorySubList_17", subCategories: ["שכר עבודה 1", "שכר עבודה 2", "שכר עבודה 3", "שכר עבודה 4", "שכר - כללי"] },
   { mainCategory: "קצבאות", namedRange: "CategorySubList_18", subCategories: ["קצבת ילדים", "קצבת נכות", "סיוע בשכר דירה", "קצבת זיקנה", "קצבאות - כללי"] },
   { mainCategory: "הכנסות שונות", namedRange: "CategorySubList_19", subCategories: ["קבלת מזונות", "הכנסה מנכס", "עזרה מההורים", "הכנסות שונות - כללי"] },
+  // "Not for classification" — a special main category (also its own single
+  // sub-category) the user can pick for any row they want excluded from the
+  // expense/income totals. It is deliberately NOT part of the expense/income
+  // sub-category lists, so the result-sheet SUMIFs never sum it. This is how the
+  // user de-duplicates a credit-card purchase that also appears as the monthly
+  // card-settlement charge on the bank statement.
+  { mainCategory: notForClassificationLabel, namedRange: "CategorySubList_20", subCategories: [notForClassificationLabel] },
 ];
 
 const fallbackRules: MappingRule[] = [
@@ -427,11 +438,12 @@ function parseBankSheet(
       // The debit/credit column is the authoritative direction signal for a bank line.
       const isExpense = debit !== null;
       // A bank line that is the aggregate credit-card settlement (e.g. "כאל",
-      // "מקס איט פיננסי") is left unclassified: its individual transactions are
-      // already counted from the card statement, so classifying it here would
-      // double-count. This mirrors the reference tool's "לא לסיווג" handling.
+      // "מקס איט פיננסי") is tagged "לא לסיווג": its individual transactions are
+      // already counted from the card statement, so counting it here too would
+      // double-count. Tagging it (rather than leaving it blank) makes the
+      // exclusion visible to the user and mirrors the reference tool.
       const classification = isCreditCardSettlement(description)
-        ? { mainCategory: "", recurrence: "", subCategory: "" }
+        ? { mainCategory: notForClassificationLabel, recurrence: "", subCategory: notForClassificationLabel }
         : classifyTransaction(description, details, isExpense, mappings);
 
       return {
@@ -1010,7 +1022,7 @@ function appendExcelClassificationSheet(
     sheet.getCell(`H${rowNumber}`).dataValidation = {
       allowBlank: true,
       formulae: [
-        `OFFSET('רשימת קטגוריות'!$A$2,0,MATCH($G${rowNumber},'רשימת קטגוריות'!$A$1:$S$1,0)-1,COUNTA(OFFSET('רשימת קטגוריות'!$A$2,0,MATCH($G${rowNumber},'רשימת קטגוריות'!$A$1:$S$1,0)-1,100,1)),1)`,
+        `OFFSET('רשימת קטגוריות'!$A$2,0,MATCH($G${rowNumber},'רשימת קטגוריות'!$A$1:$T$1,0)-1,COUNTA(OFFSET('רשימת קטגוריות'!$A$2,0,MATCH($G${rowNumber},'רשימת קטגוריות'!$A$1:$T$1,0)-1,100,1)),1)`,
       ],
       prompt: "הרשימה כאן משתנה לפי הסעיף הראשי שנבחר בעמודה הקודמת.",
       promptTitle: "בחירת שם סעיף",
@@ -1147,12 +1159,14 @@ function appendExcelChoicesSheet(workbook: ExcelJS.Workbook) {
   workbook.definedNames.add("'בחירות'!$B$2:$B$" + (recurrences.length + 1), "RecurrenceList");
 }
 
+// "לא לסיווג" is offered in both directions so the user can exclude either an
+// expense or an income row, regardless of the הוצאה/הכנסה value in column E.
 function getExpenseMainCategories() {
-  return getCategoryGroups(0, 16).map((group) => group.mainCategory);
+  return [...getCategoryGroups(0, 16).map((group) => group.mainCategory), notForClassificationLabel];
 }
 
 function getIncomeMainCategories() {
-  return getCategoryGroups(16, 19).map((group) => group.mainCategory);
+  return [...getCategoryGroups(16, 19).map((group) => group.mainCategory), notForClassificationLabel];
 }
 
 function getExpenseSubCategories() {
