@@ -970,26 +970,28 @@ function appendExcelClassificationSheet(
   sheet.getCell("Q3").value = 2;
   sheet.getCell("Q4").value = 3;
 
+  // Columns F, M, N, O and P are hidden (not deleted — the monthly-average
+  // formula and the result-sheet SUMIFs still read them). F (מחזוריות) is the
+  // recurrence selector, M is an empty spacer, and N/O/P are the three
+  // "לשימוש פנימי" helper columns. Hiding keeps the user-facing sheet clean while
+  // every formula keeps working; the user can unhide any of them in Excel.
   sheet.columns = [
-    { width: 14 },
-    { width: 12 },
-    { width: 34 },
-    { width: 14 },
-    { width: 16 },
-    { width: 18 },
-    { width: 24 },
-    { width: 28 },
-    { width: 34 },
-    { width: 14 },
-    { width: 12 },
-    { width: 16 },
-    { width: 4 },
-    { width: 20 },
-    // O and P ("מס' חודשים" / "מס' מופעים") are internal helpers that feed the
-    // column-N monthly-average formula. They are hidden (not deleted — the
-    // formulas still need them) so the sheet isn't cluttered for the user.
-    { width: 20, hidden: true },
-    { width: 20, hidden: true },
+    { width: 14 }, // A מקור
+    { width: 12 }, // B תאריך
+    { width: 34 }, // C תיאור / שם בית העסק
+    { width: 14 }, // D סכום
+    { width: 16 }, // E הוצאה/הכנסה
+    { width: 18, hidden: true }, // F מחזוריות
+    { width: 24 }, // G סעיף ראשי
+    { width: 28 }, // H שם סעיף
+    { width: 34 }, // I הערות
+    { width: 14 }, // J סכום עסקה
+    { width: 12 }, // K מטבע לחיוב
+    { width: 16 }, // L מספר כרטיס/בנק
+    { width: 4, hidden: true }, // M spacer
+    { width: 20, hidden: true }, // N לממוצע חודשי (לשימוש פנימי)
+    { width: 20, hidden: true }, // O מס' חודשים (לשימוש פנימי)
+    { width: 20, hidden: true }, // P מס' מופעים (לשימוש פנימי)
   ];
   sheet.autoFilter = `A8:P${lastRow}`;
   styleHeaderRow(sheet.getRow(8));
