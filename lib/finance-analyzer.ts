@@ -121,13 +121,14 @@ const categoryCatalog: CategoryGroup[] = [
   { mainCategory: "שכר", namedRange: "CategorySubList_17", subCategories: ["שכר עבודה 1", "שכר עבודה 2", "שכר עבודה 3", "שכר עבודה 4", "שכר - כללי"] },
   { mainCategory: "קצבאות", namedRange: "CategorySubList_18", subCategories: ["קצבת ילדים", "קצבת נכות", "סיוע בשכר דירה", "קצבת זיקנה", "קצבאות - כללי"] },
   { mainCategory: "הכנסות שונות", namedRange: "CategorySubList_19", subCategories: ["קבלת מזונות", "הכנסה מנכס", "עזרה מההורים", "הכנסות שונות - כללי"] },
-  // "Not for classification" — a special main category (also its own single
-  // sub-category) the user can pick for any row they want excluded from the
-  // expense/income totals. It is deliberately NOT part of the expense/income
-  // sub-category lists, so the result-sheet SUMIFs never sum it. This is how the
-  // user de-duplicates a credit-card purchase that also appears as the monthly
-  // card-settlement charge on the bank statement.
-  { mainCategory: notForClassificationLabel, namedRange: "CategorySubList_20", subCategories: [notForClassificationLabel] },
+  // "Not for classification" — a special main category the user can pick for any
+  // row they want excluded from the expense/income totals (e.g. de-duplicating a
+  // credit-card purchase that also appears as the monthly card-settlement charge
+  // on the bank statement). It has NO sub-categories on purpose: once a row's
+  // main category is "לא לסיווג" the שם סעיף dropdown is empty and nothing can be
+  // chosen there, matching the reference system. It is also kept out of the
+  // expense/income sub-category lists, so the result-sheet SUMIFs never sum it.
+  { mainCategory: notForClassificationLabel, namedRange: "CategorySubList_20", subCategories: [] },
 ];
 
 const fallbackRules: MappingRule[] = [
