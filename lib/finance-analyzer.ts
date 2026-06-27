@@ -95,6 +95,12 @@ const classificationHeaders = [
 // user but kept out of every expense/income total — see the catalog entry below.
 const notForClassificationLabel = "לא לסיווג";
 
+// The client asked that NO category be filled automatically: every row is imported
+// with empty סעיף ראשי / שם סעיף, and the end user classifies each one by hand
+// using the dropdowns. Only the direction (הוצאה/הכנסה) is still derived
+// automatically. Set this back to true to re-enable the rule-based engine.
+const autoClassifyCategories = false;
+
 const categoryCatalog: CategoryGroup[] = [
   { mainCategory: "מזון ופארמה", namedRange: "CategorySubList_1", subCategories: ["מזון", "פארמה וטואלטיקה", "בר מים", "אוכל מוכן / בעבודה", "עישון", "מזון ופארמה - כללי"] },
   { mainCategory: "פנאי, בילוי ותחביבים", namedRange: "CategorySubList_2", subCategories: ["מסעדה ואוכל בחוץ", "ספורט", "חופשות", "בילויים ומופעים", "חיות מחמד", "חוגי מבוגרים", "בייביסיטר", "הגרלות", "פנאי - כללי"] },
@@ -442,9 +448,10 @@ function parseBankSheet(
       // already counted from the card statement, so counting it here too would
       // double-count. Tagging it (rather than leaving it blank) makes the
       // exclusion visible to the user and mirrors the reference tool.
-      const classification = isCreditCardSettlement(description)
-        ? { mainCategory: notForClassificationLabel, recurrence: "", subCategory: notForClassificationLabel }
-        : classifyTransaction(description, details, isExpense, mappings);
+      const classification =
+        autoClassifyCategories && isCreditCardSettlement(description)
+          ? { mainCategory: notForClassificationLabel, recurrence: "", subCategory: notForClassificationLabel }
+          : classifyTransaction(description, details, isExpense, mappings);
 
       return {
         amount: Math.abs(amount),
@@ -711,6 +718,12 @@ function classifyTransaction(
   mappings: MappingRule[],
   sourceCategory = "",
 ) {
+  // Auto-classification disabled by client request: leave the category columns
+  // empty so the user fills them in manually. Direction is set by the caller.
+  if (!autoClassifyCategories) {
+    return { mainCategory: "", recurrence: "", subCategory: "" };
+  }
+
   // Multi-payment installments are left unclassified, mirroring the reference tool,
   // which sets these aside ("שקול רישום כחוב") rather than counting them as a
   // recurring monthly expense.
