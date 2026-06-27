@@ -33,11 +33,34 @@ function paymentMethod(file: File) {
   return "—";
 }
 
+// A simple inline loading spinner used while the report is being generated or downloaded.
+function Spinner({ className = "" }: { className?: string }) {
+  return (
+    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path
+        className="opacity-90"
+        d="M12 2a10 10 0 0 1 10 10"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+const steps = [
+  { title: "העלאת קבצים", text: "גררו או בחרו דפי בנק וכרטיסי אשראי — קובץ לכל חודש וכרטיס." },
+  { title: "עיבוד אוטומטי", text: "המערכת קוראת, מאחדת ומכינה את כל התנועות לסיווג." },
+  { title: "הורדת דוח", text: "מקבלים קובץ Excel מסודר, מוכן לסיווג ידני ולניתוח." },
+];
+
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState("");
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [inputVersion, setInputVersion] = useState(0);
 
@@ -126,163 +149,211 @@ export default function Home() {
     }
   }
 
-  function downloadReport() {
-    if (!result) {
+  async function downloadReport() {
+    if (!result || isDownloading) {
       return;
     }
 
-    const binary = window.atob(result.reportBase64);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    const blob = new Blob([bytes], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = result.fileName;
-    link.click();
-    URL.revokeObjectURL(url);
+    setIsDownloading(true);
+    // Yield once so the spinner can paint before the synchronous blob work runs.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    try {
+      const binary = window.atob(result.reportBase64);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      const blob = new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsDownloading(false);
+    }
   }
 
   return (
-    <main className="flex min-h-screen w-full justify-center px-4 py-10">
-      <section className="w-full max-w-3xl rounded-card bg-surface p-6 shadow-card sm:p-8">
-        {/* Header */}
-        <header className="flex items-center justify-between border-b border-border/60 pb-5">
-          <h1 className="text-2xl font-semibold text-text-strong sm:text-3xl">סיווג תנועות</h1>
-          <p className="text-sm font-medium text-accent">דפי בנק וכרטיסי אשראי</p>
-        </header>
-
-        <form className="mt-6 flex flex-col gap-5" onSubmit={submitFiles}>
-          {/* Upload instruction */}
-          <p className="text-center text-sm text-text">
-            ניתן להעלות יותר מקובץ אחד
-            <span className="mx-1 font-semibold text-accent">·</span>
-            <span className="font-semibold text-accent">קבצי אקסל XLS, XLSX בלבד</span>
-          </p>
-
-          {/* Dropzone */}
-          <label
-            className={`flex cursor-pointer flex-col items-center justify-center rounded-card border-2 border-dashed px-5 py-10 text-center transition-colors ${
-              isDragging ? "border-accent bg-row-alt" : "border-border bg-bg hover:border-accent hover:bg-surface"
-            }`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-          >
-            <input
-              accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              className="sr-only"
-              key={inputVersion}
-              multiple
-              onChange={handleInputChange}
-              type="file"
-            />
-            <span className="text-base text-text">
-              ניתן לגרור או לבחור <span className="font-semibold text-accent">קבצים כאן</span>
-            </span>
-            <span className="mt-2 text-xs text-text-muted">לכל כרטיס ולכל חודש קובץ נפרד · הקבצים מצטברים</span>
-          </label>
-
-          {/* Files table */}
+    <main className="flex min-h-screen w-full items-center justify-center px-4 py-10">
+      <div className="grid w-full max-w-5xl gap-6 lg:grid-cols-[0.85fr_1.15fr]">
+        {/* Brand / steps panel */}
+        <aside className="flex flex-col justify-between gap-8 rounded-card bg-primary p-8 text-surface">
           <div>
-            <h2 className="mb-2 text-lg font-semibold text-text-strong">קבצים</h2>
-            <div className="overflow-hidden rounded-card border border-border/70">
-              <table className="w-full border-collapse text-right text-sm">
-                <thead className="bg-table-head text-text-strong">
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">קובץ</th>
-                    <th className="px-4 py-3 font-semibold">אמצעי תשלום</th>
-                    <th className="w-12 px-4 py-3 font-semibold" aria-label="הסרה" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {files.length === 0 ? (
+            <span className="inline-flex items-center gap-2 rounded-pill bg-surface/10 px-4 py-1.5 text-sm font-medium text-surface/90">
+              <span className="h-2 w-2 rounded-full bg-accent" />
+              כלי סיווג תנועות
+            </span>
+            <h1 className="mt-6 text-3xl font-semibold leading-snug sm:text-4xl">
+              דפי בנק וכרטיסי אשראי,
+              <br />
+              מסודרים לסיווג בלחיצה.
+            </h1>
+            <p className="mt-4 text-sm leading-relaxed text-surface/70">
+              העלו את הקבצים, והמערכת תאחד את כל התנועות לדוח Excel נקי ומוכן לעבודה.
+            </p>
+          </div>
+
+          <ol className="flex flex-col gap-4">
+            {steps.map((step, index) => (
+              <li key={step.title} className="flex gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-pill bg-accent text-sm font-bold text-surface">
+                  {index + 1}
+                </span>
+                <div>
+                  <p className="font-semibold text-surface">{step.title}</p>
+                  <p className="text-sm text-surface/60">{step.text}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </aside>
+
+        {/* Upload card */}
+        <section className="rounded-card bg-surface p-6 shadow-card sm:p-8">
+          <header className="flex items-center justify-between border-b border-border/60 pb-5">
+            <h2 className="text-2xl font-semibold text-text-strong">העלאת קבצים</h2>
+            <p className="text-sm font-medium text-accent">XLS · XLSX · XLSM</p>
+          </header>
+
+          <form className="mt-6 flex flex-col gap-5" onSubmit={submitFiles}>
+            {/* Dropzone */}
+            <label
+              className={`flex cursor-pointer flex-col items-center justify-center rounded-card border-2 border-dashed px-5 py-10 text-center transition-colors ${
+                isDragging ? "border-accent bg-row-alt" : "border-border bg-bg hover:border-accent hover:bg-surface"
+              }`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+            >
+              <input
+                accept=".xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="sr-only"
+                key={inputVersion}
+                multiple
+                onChange={handleInputChange}
+                type="file"
+              />
+              <span className="text-base text-text">
+                ניתן לגרור או לבחור <span className="font-semibold text-accent">קבצים כאן</span>
+              </span>
+              <span className="mt-2 text-xs text-text-muted">לכל כרטיס ולכל חודש קובץ נפרד · הקבצים מצטברים</span>
+            </label>
+
+            {/* Files table */}
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-text-strong">קבצים</h3>
+                {files.length > 0 ? (
+                  <span className="rounded-pill bg-table-head px-3 py-1 text-xs font-medium text-text">
+                    {files.length} קבצים
+                  </span>
+                ) : null}
+              </div>
+              <div className="overflow-hidden rounded-card border border-border/70">
+                <table className="w-full border-collapse text-right text-sm">
+                  <thead className="bg-table-head text-text-strong">
                     <tr>
-                      <td className="px-4 py-8 text-center text-text-muted" colSpan={3}>
-                        עדיין לא נבחרו קבצים
-                      </td>
+                      <th className="px-4 py-3 font-semibold">קובץ</th>
+                      <th className="px-4 py-3 font-semibold">אמצעי תשלום</th>
+                      <th className="w-12 px-4 py-3 font-semibold" aria-label="הסרה" />
                     </tr>
-                  ) : (
-                    files.map((file) => (
-                      <tr className="border-t border-border/40 odd:bg-surface even:bg-row-alt" key={fileKey(file)}>
-                        <td className="px-4 py-3">
-                          <span className="block truncate text-text-strong">{file.name}</span>
-                        </td>
-                        <td className="px-4 py-3 text-text">{paymentMethod(file)}</td>
-                        <td className="px-4 py-3 text-center">
-                          <button
-                            aria-label={`הסר ${file.name}`}
-                            className="font-bold text-text-muted transition-colors hover:text-danger"
-                            onClick={() => removeFile(file)}
-                            type="button"
-                          >
-                            ✕
-                          </button>
+                  </thead>
+                  <tbody>
+                    {files.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-8 text-center text-text-muted" colSpan={3}>
+                          עדיין לא נבחרו קבצים
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {error ? (
-            <p className="rounded-card border border-danger/40 bg-danger/5 px-4 py-3 text-sm font-medium text-danger">
-              {error}
-            </p>
-          ) : null}
-
-          {/* Progress + result */}
-          {(isSubmitting || result) && !error ? (
-            <div className="rounded-card border border-border/60 bg-bg px-4 py-4">
-              <div className="h-2 overflow-hidden rounded-pill bg-table-head">
-                <div
-                  className="h-full bg-accent transition-all duration-500"
-                  style={{ width: result ? "100%" : "70%" }}
-                />
+                    ) : (
+                      files.map((file) => (
+                        <tr className="border-t border-border/40 odd:bg-surface even:bg-row-alt" key={fileKey(file)}>
+                          <td className="px-4 py-3">
+                            <span className="block truncate text-text-strong">{file.name}</span>
+                          </td>
+                          <td className="px-4 py-3 text-text">{paymentMethod(file)}</td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              aria-label={`הסר ${file.name}`}
+                              className="font-bold text-text-muted transition-colors hover:text-danger"
+                              onClick={() => removeFile(file)}
+                              type="button"
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
-              <p className="mt-3 text-sm text-text">
-                {result
-                  ? `הסיווג הסתיים — נמצאו ${result.rowCount} תנועות.`
-                  : "המערכת קוראת את הקבצים, מסווגת פעולות ומייצרת דוח..."}
-              </p>
             </div>
-          ) : null}
 
-          {/* Footer actions */}
-          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border/60 pt-5">
-            {result ? (
+            {error ? (
+              <p className="rounded-card border border-danger/40 bg-danger/5 px-4 py-3 text-sm font-medium text-danger">
+                {error}
+              </p>
+            ) : null}
+
+            {/* Progress + result */}
+            {(isSubmitting || result) && !error ? (
+              <div className="flex items-center gap-3 rounded-card border border-border/60 bg-bg px-4 py-4">
+                {isSubmitting ? <Spinner className="h-5 w-5 shrink-0 text-accent" /> : null}
+                <div className="min-w-0 flex-1">
+                  <div className="h-2 overflow-hidden rounded-pill bg-table-head">
+                    <div
+                      className={`h-full bg-accent transition-all duration-500 ${isSubmitting ? "animate-pulse" : ""}`}
+                      style={{ width: result ? "100%" : "70%" }}
+                    />
+                  </div>
+                  <p className="mt-3 text-sm text-text">
+                    {result
+                      ? `הסיווג הסתיים — נמצאו ${result.rowCount} תנועות.`
+                      : "המערכת קוראת את הקבצים, מסווגת פעולות ומייצרת דוח..."}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Footer actions */}
+            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border/60 pt-5">
+              {result ? (
+                <button
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-pill bg-primary px-8 text-base font-semibold text-surface transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isDownloading}
+                  onClick={downloadReport}
+                  type="button"
+                >
+                  {isDownloading ? <Spinner className="h-5 w-5" /> : null}
+                  <span>{isDownloading ? "מכין להורדה..." : "הורדת דוח Excel"}</span>
+                </button>
+              ) : (
+                <button
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-pill bg-primary px-8 text-base font-semibold text-surface transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!canSubmit}
+                  type="submit"
+                >
+                  {isSubmitting ? <Spinner className="h-5 w-5" /> : null}
+                  <span>{isSubmitting ? "מעבד..." : "אישור"}</span>
+                </button>
+              )}
               <button
-                className="inline-flex h-12 items-center justify-center rounded-pill bg-primary px-8 text-base font-semibold text-surface transition-colors hover:bg-primary-hover"
-                onClick={downloadReport}
+                className="inline-flex h-12 items-center justify-center rounded-pill border border-border bg-surface px-8 text-base font-medium text-text transition-colors hover:border-primary hover:text-text-strong"
+                onClick={resetForm}
                 type="button"
               >
-                הורדת דוח Excel
+                {result ? "סיווג חדש" : "ביטול"}
               </button>
-            ) : (
-              <button
-                className="inline-flex h-12 items-center justify-center rounded-pill bg-primary px-8 text-base font-semibold text-surface transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canSubmit}
-                type="submit"
-              >
-                {isSubmitting ? "מעבד..." : "אישור"}
-              </button>
-            )}
-            <button
-              className="inline-flex h-12 items-center justify-center rounded-pill border border-border bg-surface px-8 text-base font-medium text-text transition-colors hover:border-primary hover:text-text-strong"
-              onClick={resetForm}
-              type="button"
-            >
-              {result ? "סיווג חדש" : "ביטול"}
-            </button>
-          </div>
-        </form>
-      </section>
+            </div>
+          </form>
+        </section>
+      </div>
     </main>
   );
 }

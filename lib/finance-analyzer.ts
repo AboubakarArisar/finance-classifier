@@ -101,6 +101,26 @@ const notForClassificationLabel = "לא לסיווג";
 // automatically. Set this back to true to re-enable the rule-based engine.
 const autoClassifyCategories = false;
 
+// === Generated-report visual theme ==========================================
+// One self-contained palette drives the look of every sheet. It is deliberately
+// a cool teal/slate scheme with a coral accent so the output reads as its own
+// product rather than a copy of the reference template's warm beige/orange
+// styling. IMPORTANT: nothing here is referenced by a formula, data validation,
+// named range or total — these values only set fills, fonts and borders, so
+// restyling can never change a number, a dropdown or a column in the report.
+const reportTheme = {
+  headerFill: "FF124559", // deep teal — column / section header rows
+  headerText: "FFFFFFFF", // white header lettering
+  subHeaderFill: "FF3A7CA5", // lighter teal — the category-list helper header
+  titleText: "FF124559", // teal for the big labels in the KPI block
+  bandFill: "FFEFF4F7", // pale slate — zebra banding on data rows
+  editableFill: "FFDCEFEA", // soft mint — the user-editable dropdown cells (G/H)
+  kpiFill: "FFFBEAE3", // pale coral wash behind the KPI / total numbers
+  kpiText: "FFB5532A", // burnt-coral lettering for KPI / total numbers
+  noteText: "FF6B7B83", // muted slate for the helper note line
+  border: "FFB7C5CC", // soft slate cell borders
+};
+
 const categoryCatalog: CategoryGroup[] = [
   { mainCategory: "מזון ופארמה", namedRange: "CategorySubList_1", subCategories: ["מזון", "פארמה וטואלטיקה", "בר מים", "אוכל מוכן / בעבודה", "עישון", "מזון ופארמה - כללי"] },
   { mainCategory: "פנאי, בילוי ותחביבים", namedRange: "CategorySubList_2", subCategories: ["מסעדה ואוכל בחוץ", "ספורט", "חופשות", "בילויים ומופעים", "חיות מחמד", "חוגי מבוגרים", "בייביסיטר", "הגרלות", "פנאי - כללי"] },
@@ -1009,12 +1029,19 @@ function appendExcelClassificationSheet(
   ];
   sheet.autoFilter = `A8:P${lastRow}`;
   styleHeaderRow(sheet.getRow(8));
+  // KPI block (rows 1-5): teal labels on the left, coral "value chips" on the
+  // right so the family's monthly summary reads as a little dashboard card.
   ["B3", "B4", "B5"].forEach((cellAddress) => {
     sheet.getCell(cellAddress).numFmt = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
-    sheet.getCell(cellAddress).font = { bold: true };
+    sheet.getCell(cellAddress).font = { bold: true, color: { argb: reportTheme.kpiText } };
+    sheet.getCell(cellAddress).fill = { fgColor: { argb: reportTheme.kpiFill }, pattern: "solid", type: "pattern" };
   });
-  sheet.getCell("A5").font = { bold: true };
-  sheet.getCell("B5").fill = { fgColor: { argb: "FFEFEFEA" }, pattern: "solid", type: "pattern" };
+  ["A1", "A2", "A3", "A4", "A5"].forEach((cellAddress) => {
+    sheet.getCell(cellAddress).font = { bold: true, color: { argb: reportTheme.titleText } };
+  });
+  // Row 6 is the "you can edit the dropdowns" note; row 7 is the table banner.
+  sheet.getCell("A6").font = { italic: true, color: { argb: reportTheme.noteText } };
+  sheet.getCell("A7").font = { bold: true, size: 12, color: { argb: reportTheme.titleText } };
 
   for (let rowNumber = 9; rowNumber <= lastRow; rowNumber += 1) {
     sheet.getCell(`D${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00';
@@ -1049,9 +1076,41 @@ function appendExcelClassificationSheet(
       showErrorMessage: true,
       type: "list",
     };
-    sheet.getCell(`G${rowNumber}`).fill = { fgColor: { argb: "FFFFF2CC" }, pattern: "solid", type: "pattern" };
-    sheet.getCell(`H${rowNumber}`).fill = { fgColor: { argb: "FFFFF2CC" }, pattern: "solid", type: "pattern" };
+    // Zebra-band the visible columns (A-L) on alternating rows for readability,
+    // then paint the two editable dropdown cells (G/H) mint on top so they stay
+    // obvious. Hidden helper columns (M-P) are left untouched.
+    if (rowNumber % 2 === 1) {
+      for (let col = 1; col <= 12; col += 1) {
+        sheet.getCell(rowNumber, col).fill = {
+          fgColor: { argb: reportTheme.bandFill },
+          pattern: "solid",
+          type: "pattern",
+        };
+      }
+    }
+    sheet.getCell(`G${rowNumber}`).fill = { fgColor: { argb: reportTheme.editableFill }, pattern: "solid", type: "pattern" };
+    sheet.getCell(`H${rowNumber}`).fill = { fgColor: { argb: reportTheme.editableFill }, pattern: "solid", type: "pattern" };
   }
+
+  // When a row's main category is "לא לסיווג" it has no sub-category and is kept
+  // out of the totals, so both G and H for that row are shown white instead of the
+  // mint editable tint — a visual cue that the row carries no classification. This
+  // is live conditional formatting that follows the dropdown; it changes no value,
+  // formula or total. ($G locks the column, the row is relative so each line tests
+  // its own G cell.)
+  sheet.addConditionalFormatting({
+    ref: `G9:H${lastRow}`,
+    rules: [
+      {
+        type: "expression",
+        formulae: [`$G9="${notForClassificationLabel}"`],
+        priority: 1,
+        style: {
+          fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFFFFFF" } },
+        },
+      },
+    ],
+  });
 }
 
 function appendExcelResultSheet(
@@ -1098,13 +1157,26 @@ function appendExcelResultSheet(
 
   sheet.columns = [{ width: 34 }, { width: 16 }, { width: 4 }, { width: 34 }, { width: 16 }, { width: 4 }, { width: 12 }, { width: 16 }];
   [1, 3].forEach((rowNumber) => styleHeaderRow(sheet.getRow(rowNumber)));
+  // The three totals on row 1 get the same coral "value chip" look as the
+  // classification KPI block, so the two sheets feel like one product.
   ["B1", "E1", "H1"].forEach((cellAddress) => {
     sheet.getCell(cellAddress).numFmt = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
-    sheet.getCell(cellAddress).font = { bold: true };
+    sheet.getCell(cellAddress).font = { bold: true, color: { argb: reportTheme.kpiText } };
+    sheet.getCell(cellAddress).fill = { fgColor: { argb: reportTheme.kpiFill }, pattern: "solid", type: "pattern" };
   });
   for (let rowNumber = firstDataRow; rowNumber <= lastDataRow; rowNumber += 1) {
     sheet.getCell(`B${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
     sheet.getCell(`E${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
+    // Zebra-band the expense (A/B) and income (D/E) columns on alternating rows.
+    if (rowNumber % 2 === 0) {
+      [1, 2, 4, 5].forEach((col) => {
+        sheet.getCell(rowNumber, col).fill = {
+          fgColor: { argb: reportTheme.bandFill },
+          pattern: "solid",
+          type: "pattern",
+        };
+      });
+    }
   }
 }
 
@@ -1116,8 +1188,8 @@ function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
   sheet.addRows(rows);
   sheet.columns = rows[0].map(() => ({ width: 22 }));
   styleHeaderRow(sheet.getRow(1));
-  sheet.getRow(1).fill = { fgColor: { argb: "FFF28C28" }, pattern: "solid", type: "pattern" };
-  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  // Distinguish this behind-the-scenes category list with the lighter teal shade.
+  sheet.getRow(1).fill = { fgColor: { argb: reportTheme.subHeaderFill }, pattern: "solid", type: "pattern" };
 }
 
 function appendExcelImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
@@ -1223,15 +1295,15 @@ function sanitizeWorkbookForExcel(workbook: ExcelJS.Workbook) {
 }
 
 function styleHeaderRow(row: ExcelJS.Row) {
-  row.font = { bold: true };
-  row.fill = { fgColor: { argb: "FFEFEFEA" }, pattern: "solid", type: "pattern" };
+  row.font = { bold: true, color: { argb: reportTheme.headerText } };
+  row.fill = { fgColor: { argb: reportTheme.headerFill }, pattern: "solid", type: "pattern" };
   row.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   row.eachCell((cell) => {
     cell.border = {
-      bottom: { color: { argb: "FFD8D4C8" }, style: "thin" },
-      left: { color: { argb: "FFD8D4C8" }, style: "thin" },
-      right: { color: { argb: "FFD8D4C8" }, style: "thin" },
-      top: { color: { argb: "FFD8D4C8" }, style: "thin" },
+      bottom: { color: { argb: reportTheme.border }, style: "thin" },
+      left: { color: { argb: reportTheme.border }, style: "thin" },
+      right: { color: { argb: reportTheme.border }, style: "thin" },
+      top: { color: { argb: reportTheme.border }, style: "thin" },
     };
   });
 }
