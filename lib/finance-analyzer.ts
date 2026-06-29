@@ -5,6 +5,7 @@ import os from "os";
 import path from "path";
 import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
+import { injectCategoryPieCharts, type CategoryPieChart } from "./excel-charts";
 
 export type UploadKind = "credit" | "bank";
 
@@ -816,7 +817,15 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
   sanitizeWorkbookForExcel(workbook);
 
   const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
+  // ExcelJS can't emit native charts, so inject one live pie per main category
+  // (subcategory breakdown) onto the result sheet after the fact. This only
+  // references existing ranges — no cell, formula or validation is changed.
+  const withCharts = await injectCategoryPieCharts(
+    Buffer.from(buffer),
+    resultSheetName,
+    getResultSheetCategoryCharts(),
+  );
+  return withCharts;
 }
 
 function getRecurrenceMonthDivisor(recurrence: string, monthCount: number) {
@@ -1113,12 +1122,48 @@ function appendExcelClassificationSheet(
   });
 }
 
+// Result sheet identity, shared between the sheet builder and the chart
+// injector so the pie data refs always point at the right place.
+const resultSheetName = "תוצאות השיקוף";
+const resultFirstDataRow = 4;
+
+// One pie per main category: each main category's subcategories sit in a
+// contiguous block on the result sheet (column A/B for expenses, D/E for
+// income), in catalog order with no gaps — exactly how appendExcelResultSheet
+// lays them out. We walk the catalog the same way to recover each block's range.
+function getResultSheetCategoryCharts(): CategoryPieChart[] {
+  const sheetRef = `'${resultSheetName}'`;
+  const charts: CategoryPieChart[] = [];
+
+  const addBlocks = (groups: CategoryGroup[], labelColumn: string, valueColumn: string) => {
+    let row = resultFirstDataRow;
+    for (const group of groups) {
+      const count = group.subCategories.length;
+      if (count > 0) {
+        const start = row;
+        const end = row + count - 1;
+        charts.push({
+          title: group.mainCategory,
+          catRef: `${sheetRef}!$${labelColumn}$${start}:$${labelColumn}$${end}`,
+          valRef: `${sheetRef}!$${valueColumn}$${start}:$${valueColumn}$${end}`,
+        });
+      }
+      row += count;
+    }
+  };
+
+  // Expenses fill columns A (labels) / B (values); income fills D / E.
+  addBlocks(getCategoryGroups(0, 16), "A", "B");
+  addBlocks(getCategoryGroups(16, 19), "D", "E");
+  return charts;
+}
+
 function appendExcelResultSheet(
   workbook: ExcelJS.Workbook,
   transactions: NormalizedTransaction[],
   monthCount: number,
 ) {
-  const sheet = workbook.addWorksheet("תוצאות השיקוף", {
+  const sheet = workbook.addWorksheet(resultSheetName, {
     views: [{ rightToLeft: true }],
   });
   const expenseSubCategories = getExpenseSubCategories();
@@ -1129,7 +1174,7 @@ function appendExcelResultSheet(
   const totalIncome = sumCategoryAverages(incomeSubCategories, averages);
 
   // The three rows below are written first, so the per-category data starts on row 4.
-  const firstDataRow = 4;
+  const firstDataRow = resultFirstDataRow;
   const lastDataRow = maxRows + firstDataRow - 1;
 
   sheet.addRows([
