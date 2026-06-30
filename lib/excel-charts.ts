@@ -1,0 +1,270 @@
+// Native pie-chart injection for the generated report.
+//
+// ExcelJS (4.4.0) can embed images but cannot emit native Excel charts. The
+// client's reference (Shamir) workbook shows live pie charts on the result
+// sheet that recalculate as rows are reclassified, so we reproduce that by
+// post-processing the workbook buffer: ExcelJS writes the sheets/formulas, then
+// this module opens the resulting .xlsx (a zip) and injects the OOXML chart,
+// drawing, relationship and content-type parts by hand.
+//
+// Nothing here changes any cell value, formula, validation or layout — the
+// charts only *reference* ranges that already exist on the sheet.
+import JSZip from "jszip";
+
+export type CategoryPieChart = {
+  title: string;
+  // Excel range refs, already sheet-qualified and $-anchored, e.g.
+  //   'תוצאות השיקוף'!$A$4:$A$9   (subcategory labels)
+  //   'תוצאות השיקוף'!$B$4:$B$9   (subcategory values)
+  catRef: string;
+  valRef: string;
+};
+
+// Teal → coral palette derived from the report theme (reportTheme in
+// finance-analyzer). Slice colors cycle through this list so every pie reads as
+// the same product as the rest of the workbook.
+const slicePalette = [
+  "124559", "1B6E8C", "2A9D8F", "3A7CA5", "5FA8D3",
+  "E76F51", "EA580C", "B5532A", "F4A261", "6B7B83",
+];
+
+const titleColor = "124559";
+
+// Grid layout (in worksheet cells) for the pies, placed to the right of the
+// existing A–H data block.
+const gridColumns = 3;
+const firstChartCol = 9; // column J (0-based), clear of the H-column data
+const firstChartRow = 1; // row 2 (0-based)
+const chartColSpan = 7; // pie occupies 7 columns…
+const chartRowSpan = 16; // …and 16 rows
+const colStride = chartColSpan + 1; // +1 column gutter
+const rowStride = chartRowSpan + 1; // +1 row gutter
+
+// Only & < > require escaping in XML element text. We deliberately leave
+// apostrophes/quotes raw so the chart formula refs (e.g. 'תוצאות השיקוף'!$A$4)
+// read exactly the way Excel itself writes them.
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function buildChartXml(chart: CategoryPieChart) {
+  // One <c:dPt> per palette color gives the slices our themed colors; Excel
+  // cycles them across however many data points the range actually has.
+  const dataPoints = slicePalette
+    .map(
+      (color, index) =>
+        `<c:dPt><c:idx val="${index}"/><c:bubble3D val="0"/>` +
+        `<c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>` +
+        `<a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`,
+    )
+    .join("");
+
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"' +
+    ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"' +
+    ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    "<c:chart>" +
+    "<c:title><c:tx><c:rich>" +
+    '<a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" vert="horz" wrap="square" anchor="ctr" anchorCtr="1"/>' +
+    "<a:lstStyle/>" +
+    `<a:p><a:pPr><a:defRPr sz="1200" b="1" i="0" u="none" strike="noStrike" baseline="0">` +
+    `<a:solidFill><a:srgbClr val="${titleColor}"/></a:solidFill></a:defRPr></a:pPr>` +
+    `<a:r><a:rPr lang="he-IL"/><a:t>${escapeXml(chart.title)}</a:t></a:r></a:p>` +
+    "</c:rich></c:tx><c:overlay val=\"0\"/></c:title>" +
+    '<c:autoTitleDeleted val="0"/>' +
+    "<c:plotArea><c:layout/>" +
+    "<c:pieChart><c:varyColors val=\"1\"/>" +
+    "<c:ser><c:idx val=\"0\"/><c:order val=\"0\"/>" +
+    dataPoints +
+    // Percentage-only labels: the subcategory names already appear in the legend
+    // below, so repeating them on every slice just produces overlapping leader
+    // lines. Showing the percent alone is exactly the "percentage distribution"
+    // the client asked for, and stays readable even with many small slices.
+    "<c:dLbls>" +
+    '<c:numFmt formatCode="0%" sourceLinked="0"/>' +
+    '<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>' +
+    '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900" b="1"/></a:pPr><a:endParaRPr lang="he-IL"/></a:p></c:txPr>' +
+    '<c:dLblPos val="bestFit"/>' +
+    '<c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/>' +
+    '<c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/>' +
+    '<c:showLeaderLines val="1"/>' +
+    "</c:dLbls>" +
+    `<c:cat><c:strRef><c:f>${escapeXml(chart.catRef)}</c:f></c:strRef></c:cat>` +
+    `<c:val><c:numRef><c:f>${escapeXml(chart.valRef)}</c:f></c:numRef></c:val>` +
+    "</c:ser>" +
+    '<c:firstSliceAng val="0"/>' +
+    "</c:pieChart>" +
+    "</c:plotArea>" +
+    '<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>' +
+    '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/>' +
+    "</c:chart></c:chartSpace>"
+  );
+}
+
+function buildDrawingXml(count: number) {
+  let anchors = "";
+  for (let index = 0; index < count; index += 1) {
+    const gridCol = index % gridColumns;
+    const gridRow = Math.floor(index / gridColumns);
+    const fromCol = firstChartCol + gridCol * colStride;
+    const fromRow = firstChartRow + gridRow * rowStride;
+    const toCol = fromCol + chartColSpan;
+    const toRow = fromRow + chartRowSpan;
+    const frameId = index + 2; // 1 is reserved by convention
+    anchors +=
+      '<xdr:twoCellAnchor editAs="oneCell">' +
+      `<xdr:from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff>` +
+      `<xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+      `<xdr:to><xdr:col>${toCol}</xdr:col><xdr:colOff>0</xdr:colOff>` +
+      `<xdr:row>${toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
+      "<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr>" +
+      `<xdr:cNvPr id="${frameId}" name="Chart ${index + 1}"/>` +
+      "<xdr:cNvGraphicFramePr><a:graphicFrameLocks/></xdr:cNvGraphicFramePr>" +
+      "</xdr:nvGraphicFramePr>" +
+      '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
+      `<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"` +
+      ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId${index + 1}"/>` +
+      "</a:graphicData></a:graphic></xdr:graphicFrame>" +
+      "<xdr:clientData/></xdr:twoCellAnchor>";
+  }
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"' +
+    ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+    anchors +
+    "</xdr:wsDr>"
+  );
+}
+
+function buildDrawingRels(count: number) {
+  let relationships = "";
+  for (let index = 0; index < count; index += 1) {
+    relationships +=
+      `<Relationship Id="rId${index + 1}"` +
+      ' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"' +
+      ` Target="../charts/chart${index + 1}.xml"/>`;
+  }
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    relationships +
+    "</Relationships>"
+  );
+}
+
+// Resolve the sheet part path (e.g. xl/worksheets/sheet2.xml) for a sheet by its
+// display name, by walking workbook.xml → workbook.xml.rels.
+function resolveSheetPath(workbookXml: string, workbookRels: string, sheetName: string) {
+  const escaped = escapeXml(sheetName);
+  const sheetTag = new RegExp(`<sheet[^>]*name="${escaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*r:id="(rId\\d+)"`);
+  const match = workbookXml.match(sheetTag);
+  if (!match) {
+    return null;
+  }
+  const rId = match[1];
+  const relTag = new RegExp(`<Relationship[^>]*Id="${rId}"[^>]*Target="([^"]+)"`);
+  const relMatch = workbookRels.match(relTag);
+  if (!relMatch) {
+    return null;
+  }
+  const target = relMatch[1].replace(/^\//, "");
+  return target.startsWith("xl/") ? target : `xl/${target}`;
+}
+
+export async function injectCategoryPieCharts(
+  buffer: Buffer,
+  sheetName: string,
+  charts: CategoryPieChart[],
+): Promise<Buffer> {
+  if (charts.length === 0) {
+    return buffer;
+  }
+
+  const zip = await JSZip.loadAsync(buffer);
+
+  const workbookXml = await zip.file("xl/workbook.xml")?.async("string");
+  const workbookRels = await zip.file("xl/_rels/workbook.xml.rels")?.async("string");
+  if (!workbookXml || !workbookRels) {
+    return buffer;
+  }
+
+  const sheetPath = resolveSheetPath(workbookXml, workbookRels, sheetName);
+  if (!sheetPath) {
+    return buffer;
+  }
+
+  const sheetXml = await zip.file(sheetPath)?.async("string");
+  if (!sheetXml) {
+    return buffer;
+  }
+
+  // Chart/drawing part numbers — start past anything already present so we never
+  // collide with parts ExcelJS may have written (it currently writes none).
+  const drawingIndex = 1;
+  const drawingPath = `xl/drawings/drawing${drawingIndex}.xml`;
+
+  // 1. chart parts
+  charts.forEach((chart, index) => {
+    zip.file(`xl/charts/chart${index + 1}.xml`, buildChartXml(chart));
+  });
+
+  // 2. drawing part + its rels
+  zip.file(drawingPath, buildDrawingXml(charts.length));
+  zip.file(`xl/drawings/_rels/drawing${drawingIndex}.xml.rels`, buildDrawingRels(charts.length));
+
+  // 3. sheet → drawing relationship
+  const sheetRelsPath = sheetPath.replace(/worksheets\/([^/]+)$/, "worksheets/_rels/$1.rels");
+  const existingSheetRels = await zip.file(sheetRelsPath)?.async("string");
+  let drawingRelId = "rId1";
+  if (existingSheetRels) {
+    const ids = [...existingSheetRels.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1]));
+    const nextId = (ids.length ? Math.max(...ids) : 0) + 1;
+    drawingRelId = `rId${nextId}`;
+    const updated = existingSheetRels.replace(
+      "</Relationships>",
+      `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawingIndex}.xml"/></Relationships>`,
+    );
+    zip.file(sheetRelsPath, updated);
+  } else {
+    zip.file(
+      sheetRelsPath,
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawingIndex}.xml"/>` +
+        "</Relationships>",
+    );
+  }
+
+  // 4. <drawing> element on the worksheet (just before </worksheet>, which puts
+  //    it after pageSetup — the schema-correct position).
+  if (!/<drawing\s/.test(sheetXml)) {
+    const updatedSheet = sheetXml.replace(
+      "</worksheet>",
+      `<drawing r:id="${drawingRelId}"/></worksheet>`,
+    );
+    zip.file(sheetPath, updatedSheet);
+  }
+
+  // 5. content-type overrides for the new parts
+  const contentTypesPath = "[Content_Types].xml";
+  const contentTypes = await zip.file(contentTypesPath)?.async("string");
+  if (contentTypes) {
+    let overrides = "";
+    if (!contentTypes.includes(`PartName="/${drawingPath}"`)) {
+      overrides += `<Override PartName="/${drawingPath}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`;
+    }
+    charts.forEach((_, index) => {
+      overrides += `<Override PartName="/xl/charts/chart${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`;
+    });
+    const updatedTypes = contentTypes.replace("</Types>", `${overrides}</Types>`);
+    zip.file(contentTypesPath, updatedTypes);
+  }
+
+  const out = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  return out;
+}
