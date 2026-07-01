@@ -352,7 +352,7 @@ export default function Home() {
                 ) : null}
               </div>
               <div className="overflow-hidden rounded-card border border-border/70">
-                <div className="nice-scroll max-h-72 overflow-y-auto">
+                <div className="nice-scroll h-72 overflow-y-auto">
                   <table className="w-full border-collapse text-right text-sm">
                   <thead className="sticky top-0 z-10 bg-table-head text-text-strong">
                     <tr>

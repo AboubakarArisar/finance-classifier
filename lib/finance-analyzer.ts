@@ -120,6 +120,16 @@ const reportTheme = {
   kpiText: "FFB5532A", // burnt-coral lettering for KPI / total numbers
   noteText: "FF6B7B83", // muted slate for the helper note line
   border: "FFB7C5CC", // soft slate cell borders
+  // Expense / income / balance accent scheme, matching the client's reference:
+  // expenses read warm-orange/red, income reads blue, the balance reads yellow.
+  expenseFill: "FFE8730C", // orange — expense section headers
+  incomeFill: "FF2E5FA3", // blue — income section headers
+  expenseChipFill: "FFFDEAEA", // pale red behind expense value chips
+  expenseChipText: "FFC0392B", // red lettering for expense values
+  incomeChipFill: "FFE7EFF9", // pale blue behind income value chips
+  incomeChipText: "FF1F4E79", // navy lettering for income values
+  balanceFill: "FFFFF200", // yellow behind the monthly-balance chip
+  balanceText: "FF111827", // near-black lettering for the balance value
 };
 
 const categoryCatalog: CategoryGroup[] = [
@@ -1038,15 +1048,30 @@ function appendExcelClassificationSheet(
   ];
   sheet.autoFilter = `A8:P${lastRow}`;
   styleHeaderRow(sheet.getRow(8));
-  // KPI block (rows 1-5): teal labels on the left, coral "value chips" on the
-  // right so the family's monthly summary reads as a little dashboard card.
-  ["B3", "B4", "B5"].forEach((cellAddress) => {
-    sheet.getCell(cellAddress).numFmt = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
-    sheet.getCell(cellAddress).font = { bold: true, color: { argb: reportTheme.kpiText } };
-    sheet.getCell(cellAddress).fill = { fgColor: { argb: reportTheme.kpiFill }, pattern: "solid", type: "pattern" };
+  // Two-line headers: keep the title at the header size but drop the parenthetical
+  // default-value note to size 9 so it reads as a caption (Change #4).
+  applyHeaderSubtitle(sheet.getCell("E8"), "הוצאה/הכנסה", "\n(ברירת מחדל: הוצאה)", 9);
+  applyHeaderSubtitle(sheet.getCell("F8"), "מחזוריות", "\n(ברירת מחדל: חודשי/מזדמן)");
+  // KPI block (rows 1-5): teal labels on the left, colour-coded "value chips" on
+  // the right so the family's monthly summary reads as a little dashboard card —
+  // expenses red, income blue, monthly balance yellow (matches the reference).
+  const kpiNumberFormat = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
+  const kpiChips: Array<[string, string, string]> = [
+    ["B3", reportTheme.expenseChipText, reportTheme.expenseChipFill],
+    ["B4", reportTheme.incomeChipText, reportTheme.incomeChipFill],
+    ["B5", reportTheme.balanceText, reportTheme.balanceFill],
+  ];
+  kpiChips.forEach(([cellAddress, textColor, fillColor]) => {
+    sheet.getCell(cellAddress).numFmt = kpiNumberFormat;
+    sheet.getCell(cellAddress).font = { bold: true, size: 12, color: { argb: textColor } };
+    sheet.getCell(cellAddress).fill = { fgColor: { argb: fillColor }, pattern: "solid", type: "pattern" };
   });
+  // The whole KPI block (labels A1:A5 and values B1:B5) reads at size 12.
   ["A1", "A2", "A3", "A4", "A5"].forEach((cellAddress) => {
-    sheet.getCell(cellAddress).font = { bold: true, color: { argb: reportTheme.titleText } };
+    sheet.getCell(cellAddress).font = { bold: true, size: 12, color: { argb: reportTheme.titleText } };
+  });
+  ["B1", "B2"].forEach((cellAddress) => {
+    sheet.getCell(cellAddress).font = { bold: true, size: 12, color: { argb: reportTheme.titleText } };
   });
   // Row 6 is the "you can edit the dropdowns" note; row 7 is the table banner.
   sheet.getCell("A6").font = { italic: true, color: { argb: reportTheme.noteText } };
@@ -1099,6 +1124,11 @@ function appendExcelClassificationSheet(
     }
     sheet.getCell(`G${rowNumber}`).fill = { fgColor: { argb: reportTheme.editableFill }, pattern: "solid", type: "pattern" };
     sheet.getCell(`H${rowNumber}`).fill = { fgColor: { argb: reportTheme.editableFill }, pattern: "solid", type: "pattern" };
+    // Uniform dashed separator under every row so the table reads as one clean grid.
+    for (let col = 1; col <= 12; col += 1) {
+      const cell = sheet.getCell(rowNumber, col);
+      cell.border = { ...cell.border, bottom: { color: { argb: reportTheme.border }, style: "dashed" } };
+    }
   }
 
   // When a row's main category is "לא לסיווג" it has no sub-category and is kept
@@ -1155,6 +1185,30 @@ function getResultSheetCategoryCharts(): CategoryPieChart[] {
   // Expenses fill columns A (labels) / B (values); income fills D / E.
   addBlocks(getCategoryGroups(0, 16), "A", "B");
   addBlocks(getCategoryGroups(16, 19), "D", "E");
+
+  // Two big summary pies (expenses / income by MAIN category), plotting the
+  // aggregate block appendExcelResultSheet writes into columns G/H. Placed side
+  // by side across the top of the chart area; the per-category pies flow below.
+  const expenseMainCount = getCategoryGroups(0, 16).filter((group) => group.subCategories.length > 0).length;
+  const incomeMainCount = getCategoryGroups(16, 19).filter((group) => group.subCategories.length > 0).length;
+  const expenseStart = resultFirstDataRow;
+  const expenseEnd = expenseStart + expenseMainCount - 1;
+  const incomeStart = expenseEnd + 2; // one gap row between the two blocks
+  const incomeEnd = incomeStart + incomeMainCount - 1;
+  charts.push({
+    title: "הוצאות",
+    catRef: `${sheetRef}!$G$${expenseStart}:$G$${expenseEnd}`,
+    valRef: `${sheetRef}!$H$${expenseStart}:$H$${expenseEnd}`,
+    variant: "summary",
+    anchor: { fromCol: 9, fromRow: 0, toCol: 19, toRow: 20 },
+  });
+  charts.push({
+    title: "הכנסות",
+    catRef: `${sheetRef}!$G$${incomeStart}:$G$${incomeEnd}`,
+    valRef: `${sheetRef}!$H$${incomeStart}:$H$${incomeEnd}`,
+    variant: "summary",
+    anchor: { fromCol: 20, fromRow: 0, toCol: 30, toRow: 20 },
+  });
   return charts;
 }
 
@@ -1200,14 +1254,33 @@ function appendExcelResultSheet(
     ]);
   }
 
-  sheet.columns = [{ width: 34 }, { width: 16 }, { width: 4 }, { width: 34 }, { width: 16 }, { width: 4 }, { width: 12 }, { width: 16 }];
+  sheet.columns = [{ width: 34 }, { width: 16 }, { width: 4 }, { width: 34 }, { width: 16 }, { width: 4 }, { width: 22 }, { width: 16 }];
   [1, 3].forEach((rowNumber) => styleHeaderRow(sheet.getRow(rowNumber)));
-  // The three totals on row 1 get the same coral "value chip" look as the
-  // classification KPI block, so the two sheets feel like one product.
-  ["B1", "E1", "H1"].forEach((cellAddress) => {
-    sheet.getCell(cellAddress).numFmt = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
-    sheet.getCell(cellAddress).font = { bold: true, color: { argb: reportTheme.kpiText } };
-    sheet.getCell(cellAddress).fill = { fgColor: { argb: reportTheme.kpiFill }, pattern: "solid", type: "pattern" };
+  // Colour-code the section headings and bump them to size 12: expenses read
+  // orange, income reads blue, the balance reads yellow — matching the reference.
+  const headingFont = { bold: true, size: 12, color: { argb: reportTheme.headerText } };
+  const solidFill = (argb: string) => ({ fgColor: { argb }, pattern: "solid" as const, type: "pattern" as const });
+  (["A1", "A3", "B3"] as const).forEach((cellAddress) => {
+    sheet.getCell(cellAddress).font = headingFont;
+    sheet.getCell(cellAddress).fill = solidFill(reportTheme.expenseFill);
+  });
+  (["D1", "D3", "E3"] as const).forEach((cellAddress) => {
+    sheet.getCell(cellAddress).font = headingFont;
+    sheet.getCell(cellAddress).fill = solidFill(reportTheme.incomeFill);
+  });
+  sheet.getCell("G1").font = headingFont; // "הפרש" keeps the teal header fill
+  // The three totals on row 1 get colour-matched "value chips": expenses red,
+  // income blue, monthly balance yellow.
+  const totalNumberFormat = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
+  const totalChips: Array<[string, string, string]> = [
+    ["B1", reportTheme.expenseChipText, reportTheme.expenseChipFill],
+    ["E1", reportTheme.incomeChipText, reportTheme.incomeChipFill],
+    ["H1", reportTheme.balanceText, reportTheme.balanceFill],
+  ];
+  totalChips.forEach(([cellAddress, textColor, fillColor]) => {
+    sheet.getCell(cellAddress).numFmt = totalNumberFormat;
+    sheet.getCell(cellAddress).font = { bold: true, size: 12, color: { argb: textColor } };
+    sheet.getCell(cellAddress).fill = solidFill(fillColor);
   });
   for (let rowNumber = firstDataRow; rowNumber <= lastDataRow; rowNumber += 1) {
     sheet.getCell(`B${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
@@ -1223,6 +1296,36 @@ function appendExcelResultSheet(
       });
     }
   }
+
+  // Main-category totals in columns G/H — the data behind the two summary pies
+  // (one for expenses, one for income). Each cell just SUMs a subcategory block
+  // that already exists on this sheet, so it adds no new calculation to the
+  // classification workflow; it only aggregates values for the charts to plot.
+  // These row positions must match getResultSheetMainCategoryChartRefs().
+  const summaryNumberFormat = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
+  const writeMainCategoryTotals = (groups: CategoryGroup[], valueColumn: string, startRow: number) => {
+    let blockRow = firstDataRow;
+    let aggRow = startRow;
+    for (const group of groups) {
+      const count = group.subCategories.length;
+      if (count > 0) {
+        const blockStart = blockRow;
+        const blockEnd = blockRow + count - 1;
+        sheet.getCell(`G${aggRow}`).value = group.mainCategory;
+        sheet.getCell(`G${aggRow}`).font = { bold: true, color: { argb: reportTheme.titleText } };
+        sheet.getCell(`H${aggRow}`).value = {
+          formula: `SUM(${valueColumn}${blockStart}:${valueColumn}${blockEnd})`,
+          result: sumCategoryAverages(group.subCategories, averages),
+        };
+        sheet.getCell(`H${aggRow}`).numFmt = summaryNumberFormat;
+        aggRow += 1;
+      }
+      blockRow += count;
+    }
+    return aggRow;
+  };
+  const incomeSummaryStart = writeMainCategoryTotals(getCategoryGroups(0, 16), "B", firstDataRow) + 1;
+  writeMainCategoryTotals(getCategoryGroups(16, 19), "E", incomeSummaryStart);
 }
 
 function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
@@ -1351,6 +1454,18 @@ function styleHeaderRow(row: ExcelJS.Row) {
       top: { color: { argb: reportTheme.border }, style: "thin" },
     };
   });
+}
+
+// Renders a two-line header cell as rich text: the main title keeps the header
+// font size (11), while the parenthetical default-value note drops to size 9 so
+// it reads as a small caption. Purely a font tweak — the cell text is unchanged.
+function applyHeaderSubtitle(cell: ExcelJS.Cell, title: string, subtitle: string, titleSize = 11) {
+  cell.value = {
+    richText: [
+      { text: title, font: { bold: true, size: titleSize, color: { argb: reportTheme.headerText } } },
+      { text: subtitle, font: { bold: true, size: 9, color: { argb: reportTheme.headerText } } },
+    ],
+  };
 }
 
 function countDistinctMonths(transactions: NormalizedTransaction[]) {

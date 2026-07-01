@@ -11,6 +11,14 @@
 // charts only *reference* ranges that already exist on the sheet.
 import JSZip from "jszip";
 
+export type ChartAnchor = {
+  // 0-based worksheet cell coordinates for the chart's top-left / bottom-right.
+  fromCol: number;
+  fromRow: number;
+  toCol: number;
+  toRow: number;
+};
+
 export type CategoryPieChart = {
   title: string;
   // Excel range refs, already sheet-qualified and $-anchored, e.g.
@@ -18,6 +26,12 @@ export type CategoryPieChart = {
   //   'תוצאות השיקוף'!$B$4:$B$9   (subcategory values)
   catRef: string;
   valRef: string;
+  // "category" (default) = small pie, percent-only labels + legend below.
+  // "summary" = large pie, category-name + percent labels around the slices,
+  // no legend — used for the two big expenses/income overview pies.
+  variant?: "category" | "summary";
+  // Explicit placement. When omitted the chart flows into the auto grid.
+  anchor?: ChartAnchor;
 };
 
 // Teal → coral palette derived from the report theme (reportTheme in
@@ -34,7 +48,7 @@ const titleColor = "124559";
 // existing A–H data block.
 const gridColumns = 3;
 const firstChartCol = 9; // column J (0-based), clear of the H-column data
-const firstChartRow = 1; // row 2 (0-based)
+const firstChartRow = 22; // row 23 (0-based) — below the two big summary pies at the top
 const chartColSpan = 7; // pie occupies 7 columns…
 const chartRowSpan = 16; // …and 16 rows
 const colStride = chartColSpan + 1; // +1 column gutter
@@ -51,6 +65,25 @@ function escapeXml(value: string) {
 }
 
 function buildChartXml(chart: CategoryPieChart) {
+  const isSummary = chart.variant === "summary";
+
+  // Summary pies label each slice with the category name AND its percent (like
+  // the reference overview pies) and drop the legend; category pies show the
+  // percent only and rely on a legend below for the names.
+  const dataLabels =
+    "<c:dLbls>" +
+    '<c:numFmt formatCode="0%" sourceLinked="0"/>' +
+    '<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>' +
+    '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900" b="1"/></a:pPr><a:endParaRPr lang="he-IL"/></a:p></c:txPr>' +
+    `<c:dLblPos val="${isSummary ? "outEnd" : "bestFit"}"/>` +
+    '<c:showLegendKey val="0"/><c:showVal val="0"/>' +
+    `<c:showCatName val="${isSummary ? "1" : "0"}"/>` +
+    '<c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/>' +
+    (isSummary ? "<c:separator>\n</c:separator>" : "") +
+    '<c:showLeaderLines val="1"/>' +
+    "</c:dLbls>";
+  const legend = isSummary ? "" : '<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>';
+
   // One <c:dPt> per palette color gives the slices our themed colors; Excel
   // cycles them across however many data points the range actually has.
   const dataPoints = slicePalette
@@ -80,40 +113,38 @@ function buildChartXml(chart: CategoryPieChart) {
     "<c:pieChart><c:varyColors val=\"1\"/>" +
     "<c:ser><c:idx val=\"0\"/><c:order val=\"0\"/>" +
     dataPoints +
-    // Percentage-only labels: the subcategory names already appear in the legend
-    // below, so repeating them on every slice just produces overlapping leader
-    // lines. Showing the percent alone is exactly the "percentage distribution"
-    // the client asked for, and stays readable even with many small slices.
-    "<c:dLbls>" +
-    '<c:numFmt formatCode="0%" sourceLinked="0"/>' +
-    '<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>' +
-    '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900" b="1"/></a:pPr><a:endParaRPr lang="he-IL"/></a:p></c:txPr>' +
-    '<c:dLblPos val="bestFit"/>' +
-    '<c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/>' +
-    '<c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/>' +
-    '<c:showLeaderLines val="1"/>' +
-    "</c:dLbls>" +
+    dataLabels +
     `<c:cat><c:strRef><c:f>${escapeXml(chart.catRef)}</c:f></c:strRef></c:cat>` +
     `<c:val><c:numRef><c:f>${escapeXml(chart.valRef)}</c:f></c:numRef></c:val>` +
     "</c:ser>" +
     '<c:firstSliceAng val="0"/>' +
     "</c:pieChart>" +
     "</c:plotArea>" +
-    '<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>' +
+    legend +
     '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/>' +
     "</c:chart></c:chartSpace>"
   );
 }
 
-function buildDrawingXml(count: number) {
+function buildDrawingXml(charts: CategoryPieChart[]) {
   let anchors = "";
-  for (let index = 0; index < count; index += 1) {
-    const gridCol = index % gridColumns;
-    const gridRow = Math.floor(index / gridColumns);
-    const fromCol = firstChartCol + gridCol * colStride;
-    const fromRow = firstChartRow + gridRow * rowStride;
-    const toCol = fromCol + chartColSpan;
-    const toRow = fromRow + chartRowSpan;
+  let gridIndex = 0; // counts only auto-placed (anchor-less) charts
+  charts.forEach((chart, index) => {
+    let fromCol: number;
+    let fromRow: number;
+    let toCol: number;
+    let toRow: number;
+    if (chart.anchor) {
+      ({ fromCol, fromRow, toCol, toRow } = chart.anchor);
+    } else {
+      const gridCol = gridIndex % gridColumns;
+      const gridRow = Math.floor(gridIndex / gridColumns);
+      fromCol = firstChartCol + gridCol * colStride;
+      fromRow = firstChartRow + gridRow * rowStride;
+      toCol = fromCol + chartColSpan;
+      toRow = fromRow + chartRowSpan;
+      gridIndex += 1;
+    }
     const frameId = index + 2; // 1 is reserved by convention
     anchors +=
       '<xdr:twoCellAnchor editAs="oneCell">' +
@@ -131,7 +162,7 @@ function buildDrawingXml(count: number) {
       ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId${index + 1}"/>` +
       "</a:graphicData></a:graphic></xdr:graphicFrame>" +
       "<xdr:clientData/></xdr:twoCellAnchor>";
-  }
+  });
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"' +
@@ -214,7 +245,7 @@ export async function injectCategoryPieCharts(
   });
 
   // 2. drawing part + its rels
-  zip.file(drawingPath, buildDrawingXml(charts.length));
+  zip.file(drawingPath, buildDrawingXml(charts));
   zip.file(`xl/drawings/_rels/drawing${drawingIndex}.xml.rels`, buildDrawingRels(charts.length));
 
   // 3. sheet → drawing relationship
