@@ -193,6 +193,17 @@ export default function Home() {
             <p className="mt-4 text-sm leading-relaxed text-surface/70">
               העלו את הקבצים, והמערכת תאחד את כל התנועות לדוח Excel נקי ומוכן לעבודה.
             </p>
+
+            <div className="mt-6 overflow-hidden rounded-card border border-surface/10 shadow-card">
+              <iframe
+                className="aspect-video w-full"
+                src="https://www.youtube.com/embed/DxrmYrGmhks"
+                title="איך המערכת עובדת"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
+            </div>
           </div>
 
           <ol className="flex flex-col gap-4">
@@ -255,8 +266,9 @@ export default function Home() {
                 ) : null}
               </div>
               <div className="overflow-hidden rounded-card border border-border/70">
-                <table className="w-full border-collapse text-right text-sm">
-                  <thead className="bg-table-head text-text-strong">
+                <div className="nice-scroll max-h-72 overflow-y-auto">
+                  <table className="w-full border-collapse text-right text-sm">
+                  <thead className="sticky top-0 z-10 bg-table-head text-text-strong">
                     <tr>
                       <th className="px-4 py-3 font-semibold">קובץ</th>
                       <th className="px-4 py-3 font-semibold">אמצעי תשלום</th>
@@ -291,7 +303,8 @@ export default function Home() {
                       ))
                     )}
                   </tbody>
-                </table>
+                  </table>
+                </div>
               </div>
             </div>
 
