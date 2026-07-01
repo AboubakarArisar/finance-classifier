@@ -185,7 +185,7 @@ export default function Home() {
               <span className="h-2 w-2 rounded-full bg-accent" />
               כלי סיווג תנועות
             </span>
-            <h1 className="mt-6 text-3xl font-semibold leading-snug sm:text-4xl">
+            <h1 className="mt-6 text-2xl font-semibold leading-snug sm:text-3xl">
               דפי בנק וכרטיסי אשראי,
               <br />
               מסודרים לסיווג בלחיצה.
