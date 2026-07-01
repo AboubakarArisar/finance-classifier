@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type AnalyzeResponse = {
   downloadUrl: string;
@@ -21,16 +21,69 @@ function fileKey(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}`;
 }
 
-// Best-effort label from the file name; the server still auto-detects the real type.
-function paymentMethod(file: File) {
+type FileKind = "bank" | "credit";
+
+// Instant, best-effort guess from the file name (shown while the content is being
+// read). Returns null when the name gives no hint.
+function guessKindFromName(file: File): FileKind | null {
   const name = file.name;
   if (/אשראי|סקיי|כרטיס|מסטרקארד|ויזה|כאל|מקס|ישראכרט|אמריקן|דיינרס|פירוט עסקאות/.test(name)) {
-    return "כרטיס אשראי";
+    return "credit";
   }
   if (/בנק|עו"?ש|עובר ושב|חשבון|תנועות בחשבון/.test(name)) {
-    return "חשבון בנק";
+    return "bank";
   }
-  return "—";
+  return null;
+}
+
+function kindLabel(kind: FileKind) {
+  return kind === "bank" ? "חשבון בנק" : "כרטיס אשראי";
+}
+
+// Mirrors the server's header normalisation so client-side detection matches
+// exactly what parseWorkbook does.
+function normalizeHeaderCell(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase("he-IL");
+}
+
+function rowMatchesHeaders(cells: string[], required: string[]) {
+  return required.every((header) => cells.includes(normalizeHeaderCell(header)));
+}
+
+// Same header signatures the server uses to pick a statement layout
+// (parseCreditSheet / parseBankSheet / parseIsracardSheet).
+function detectKindFromRows(rows: unknown[][]): FileKind | null {
+  for (const row of rows.slice(0, 20)) {
+    const cells = row.map(normalizeHeaderCell);
+    if (rowMatchesHeaders(cells, ["תאריך עסקה", "שם בית העסק", "סכום חיוב"])) return "credit";
+    if (rowMatchesHeaders(cells, ["תאריך", "הפעולה", "חובה", "זכות"])) return "bank";
+    if (rowMatchesHeaders(cells, ["שם בית עסק", "סכום חיוב"])) return "credit";
+  }
+  return null;
+}
+
+// Reads the workbook in the browser (SheetJS, loaded on demand) and returns the
+// real statement type, exactly as the server would classify it. Used only for
+// the upload preview label — the server remains the source of truth.
+async function detectFileKind(file: File): Promise<FileKind | null> {
+  try {
+    const XLSX = await import("xlsx");
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array" });
+    for (const sheetName of workbook.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+        blankrows: false,
+        defval: "",
+        header: 1,
+        raw: false,
+      });
+      const kind = detectKindFromRows(rows);
+      if (kind) return kind;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 // A simple inline loading spinner used while the report is being generated or downloaded.
@@ -63,8 +116,33 @@ export default function Home() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [inputVersion, setInputVersion] = useState(0);
+  // Detected statement type per file (keyed by fileKey). "unknown" = detection ran but found nothing.
+  const [kinds, setKinds] = useState<Record<string, FileKind | "unknown">>({});
+  const detectingRef = useRef<Set<string>>(new Set());
 
   const canSubmit = useMemo(() => files.length > 0 && !isSubmitting, [files, isSubmitting]);
+
+  // Detect the real statement type for any newly added file, in the background.
+  useEffect(() => {
+    files.forEach((file) => {
+      const key = fileKey(file);
+      if (kinds[key] !== undefined || detectingRef.current.has(key)) return;
+      detectingRef.current.add(key);
+      detectFileKind(file)
+        .then((kind) => setKinds((prev) => ({ ...prev, [key]: kind ?? "unknown" })))
+        .finally(() => detectingRef.current.delete(key));
+    });
+  }, [files, kinds]);
+
+  // The label to show in the file table: detected type wins, then the name-based
+  // guess, then a transient "detecting" note.
+  function fileTypeLabel(file: File) {
+    const detected = kinds[fileKey(file)];
+    if (detected === "bank" || detected === "credit") return kindLabel(detected);
+    const guessed = guessKindFromName(file);
+    if (guessed) return kindLabel(guessed);
+    return detected === "unknown" ? "לא זוהה" : "מזהה…";
+  }
 
   function addFiles(incoming: File[]) {
     setResult(null);
@@ -107,7 +185,14 @@ export default function Home() {
   function removeFile(target: File) {
     setResult(null);
     setError("");
-    setFiles((current) => current.filter((file) => fileKey(file) !== fileKey(target)));
+    const key = fileKey(target);
+    setFiles((current) => current.filter((file) => fileKey(file) !== key));
+    setKinds((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }
 
   function resetForm() {
@@ -116,6 +201,7 @@ export default function Home() {
     setResult(null);
     setIsSubmitting(false);
     setInputVersion((current) => current + 1);
+    setKinds({});
   }
 
   async function submitFiles(event: FormEvent<HTMLFormElement>) {
@@ -271,7 +357,7 @@ export default function Home() {
                   <thead className="sticky top-0 z-10 bg-table-head text-text-strong">
                     <tr>
                       <th className="px-4 py-3 font-semibold">קובץ</th>
-                      <th className="px-4 py-3 font-semibold">אמצעי תשלום</th>
+                      <th className="px-4 py-3 font-semibold">סוג הקובץ</th>
                       <th className="w-12 px-4 py-3 font-semibold" aria-label="הסרה" />
                     </tr>
                   </thead>
@@ -288,7 +374,7 @@ export default function Home() {
                           <td className="px-4 py-3">
                             <span className="block truncate text-text-strong">{file.name}</span>
                           </td>
-                          <td className="px-4 py-3 text-text">{paymentMethod(file)}</td>
+                          <td className="px-4 py-3 text-text">{fileTypeLabel(file)}</td>
                           <td className="px-4 py-3 text-center">
                             <button
                               aria-label={`הסר ${file.name}`}
