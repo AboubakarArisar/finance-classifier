@@ -1050,7 +1050,7 @@ function appendExcelClassificationSheet(
   styleHeaderRow(sheet.getRow(8));
   // Two-line headers: keep the title at the header size but drop the parenthetical
   // default-value note to size 9 so it reads as a caption (Change #4).
-  applyHeaderSubtitle(sheet.getCell("E8"), "הוצאה/הכנסה", "\n(ברירת מחדל: הוצאה)", 9);
+  applyHeaderSubtitle(sheet.getCell("E8"), "הוצאה/הכנסה", "\n(ברירת מחדל: הוצאה)");
   applyHeaderSubtitle(sheet.getCell("F8"), "מחזוריות", "\n(ברירת מחדל: חודשי/מזדמן)");
   // Two matching helper notes on the classification header cells, so the
   // "how do I pick a category?" explanation sits symmetrically above both the
