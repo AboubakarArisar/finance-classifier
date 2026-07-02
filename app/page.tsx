@@ -265,7 +265,7 @@ export default function Home() {
     <main className="flex min-h-screen w-full items-center justify-center px-4 py-10">
       <div className="grid w-full max-w-5xl gap-6 lg:grid-cols-[0.85fr_1.15fr]">
         {/* Brand / steps panel */}
-        <aside className="flex flex-col justify-between gap-8 rounded-card bg-primary p-8 text-surface">
+        <aside className="flex flex-col md:order-first order-second justify-between gap-8 rounded-card bg-primary p-8 text-surface">
           <div>
             <span className="inline-flex items-center gap-2 rounded-pill bg-surface/10 px-4 py-1.5 text-sm font-medium text-surface/90">
               <span className="h-2 w-2 rounded-full bg-accent" />
@@ -308,14 +308,14 @@ export default function Home() {
         </aside>
 
         {/* Upload card */}
-        <section className="rounded-card bg-surface p-6 shadow-card sm:p-8">
+        <section className="rounded-card md:order-second order-first bg-surface p-6 shadow-card sm:p-8">
           <header className="flex items-center justify-between border-b border-border/60 pb-5">
             <h2 className="text-2xl font-semibold text-text-strong">העלאת קבצים</h2>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="https://res.cloudinary.com/dnpxugbk9/image/upload/v1783013365/logo_lrsktq.png"
               alt="Benny Vazana"
-              className="h-14 w-auto object-contain"
+              className="h-14 w-44 object-contain"
             />
           </header>
 
