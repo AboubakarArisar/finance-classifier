@@ -1052,6 +1052,28 @@ function appendExcelClassificationSheet(
   // default-value note to size 9 so it reads as a caption (Change #4).
   applyHeaderSubtitle(sheet.getCell("E8"), "הוצאה/הכנסה", "\n(ברירת מחדל: הוצאה)", 9);
   applyHeaderSubtitle(sheet.getCell("F8"), "מחזוריות", "\n(ברירת מחדל: חודשי/מזדמן)");
+  // Two matching helper notes on the classification header cells, so the
+  // "how do I pick a category?" explanation sits symmetrically above both the
+  // סעיף ראשי (G) and שם סעיף (H) columns. Pure annotation — anchored to adjacent
+  // header cells so the boxes render side-by-side; no list, formula or validation
+  // is touched.
+  const classificationHelperNote = (title: string, body: string): ExcelJS.Comment => ({
+    texts: [
+      { font: { bold: true, size: 9, color: { argb: reportTheme.titleText } }, text: `${title}\n` },
+      { font: { size: 9, color: { argb: reportTheme.noteText } }, text: body },
+    ],
+    margins: { insetmode: "custom", inset: [0.13, 0.13, 0.13, 0.13] },
+    protection: { locked: "True", lockText: "True" },
+    editAs: "twoCells",
+  });
+  sheet.getCell("G8").note = classificationHelperNote(
+    "סעיף ראשי · בחירה אופציונלית",
+    "לחצו על החץ ▾ שבתא כדי לפתוח את הרשימה ולבחור סעיף ראשי. הבחירה אינה חובה — היא מצמצמת את רשימת שמות הסעיף בעמודה הבאה.",
+  );
+  sheet.getCell("H8").note = classificationHelperNote(
+    "שם סעיף · בחירה אופציונלית",
+    "לחצו על החץ ▾ שבתא כדי לפתוח את הרשימה ולבחור שם סעיף. הרשימה משתנה לפי הסעיף הראשי שנבחר. הבחירה אינה חובה.",
+  );
   // KPI block (rows 1-5): teal labels on the left, colour-coded "value chips" on
   // the right so the family's monthly summary reads as a little dashboard card —
   // expenses red, income blue, monthly balance yellow (matches the reference).
@@ -1095,7 +1117,10 @@ function appendExcelClassificationSheet(
       formulae: [`IF($E${rowNumber}="הכנסה",IncomeMainCategoryList,ExpenseMainCategoryList)`],
       prompt: "בחרו סעיף ראשי כדי לצמצם את רשימת שמות הסעיף בעמודה הבאה.",
       promptTitle: "בחירת סעיף ראשי",
-      showInputMessage: true,
+      // Guidance now lives in the symmetric header note on G8; the floating input
+      // popup landed over the neighbouring column in RTL, so it stays off. The list
+      // and validation enforcement below are unchanged.
+      showInputMessage: false,
       showErrorMessage: true,
       type: "list",
     };
@@ -1106,7 +1131,8 @@ function appendExcelClassificationSheet(
       ],
       prompt: "הרשימה כאן משתנה לפי הסעיף הראשי שנבחר בעמודה הקודמת.",
       promptTitle: "בחירת שם סעיף",
-      showInputMessage: true,
+      // Guidance now lives in the symmetric header note on H8 (see G8 above).
+      showInputMessage: false,
       showErrorMessage: true,
       type: "list",
     };

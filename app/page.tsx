@@ -103,9 +103,9 @@ function Spinner({ className = "" }: { className?: string }) {
 }
 
 const steps = [
-  { title: "העלאת קבצים", text: "גררו או בחרו דפי בנק וכרטיסי אשראי — קובץ לכל חודש וכרטיס." },
-  { title: "עיבוד אוטומטי", text: "המערכת קוראת, מאחדת ומכינה את כל התנועות לסיווג." },
-  { title: "הורדת דוח", text: "מקבלים קובץ Excel מסודר, מוכן לסיווג ידני ולניתוח." },
+  { title: "העלאת קבצים", text: "גררו או בחרו את תדפיסי האקסל מהבנק ומחברת האשראי" },
+  { title: "עיבוד אוטומטי", text: "לחצו אישור (לאחר שכל הקבצים מופיעים בחלון הקבצים)" },
+  { title: "הורדת דוח", text: "המערכת מכינה ומורידה למחשב את קובץ השיקוף מוכן לסיווג" },
 ];
 
 export default function Home() {
@@ -269,7 +269,7 @@ export default function Home() {
           <div>
             <span className="inline-flex items-center gap-2 rounded-pill bg-surface/10 px-4 py-1.5 text-sm font-medium text-surface/90">
               <span className="h-2 w-2 rounded-full bg-accent" />
-              כלי סיווג תנועות
+              כלי לבניית שיקוף ותקציב
             </span>
             <h1 className="mt-6 text-2xl font-semibold leading-snug sm:text-3xl">
               דפי בנק וכרטיסי אשראי,
@@ -277,7 +277,7 @@ export default function Home() {
               מסודרים לסיווג בלחיצה.
             </h1>
             <p className="mt-4 text-sm leading-relaxed text-surface/70">
-              העלו את הקבצים, והמערכת תאחד את כל התנועות לדוח Excel נקי ומוכן לעבודה.
+              העלו את הקבצים והמערכת תבנה עבורכם את השיקוף החודשי הנדרש
             </p>
 
             <div className="mt-6 overflow-hidden rounded-card border border-surface/10 shadow-card">
@@ -311,7 +311,12 @@ export default function Home() {
         <section className="rounded-card bg-surface p-6 shadow-card sm:p-8">
           <header className="flex items-center justify-between border-b border-border/60 pb-5">
             <h2 className="text-2xl font-semibold text-text-strong">העלאת קבצים</h2>
-            <p className="text-sm font-medium text-accent">XLS · XLSX · XLSM</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo.jpg"
+              alt="Benny Vazana"
+              className="h-14 w-auto object-contain"
+            />
           </header>
 
           <form className="mt-6 flex flex-col gap-5" onSubmit={submitFiles}>
