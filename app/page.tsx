@@ -313,7 +313,7 @@ export default function Home() {
             <h2 className="text-2xl font-semibold text-text-strong">העלאת קבצים</h2>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/logo.jpg"
+              src="https://res.cloudinary.com/dnpxugbk9/image/upload/v1783012114/logo_tupgk3.jpg"
               alt="Benny Vazana"
               className="h-14 w-auto object-contain"
             />

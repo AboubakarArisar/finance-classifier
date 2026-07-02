@@ -252,7 +252,7 @@ export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Pro
   }
 
   const reportBuffer = await buildReportWorkbook(transactions, sheetSummaries);
-  const fileName = `financial-classification-${jobId}.xlsx`;
+  const fileName = `Benny-Vazana-Finance-${jobId}.xlsx`;
   await writeFile(path.join(jobDir, "report.xlsx"), reportBuffer);
 
   return {
