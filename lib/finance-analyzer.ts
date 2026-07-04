@@ -1110,9 +1110,12 @@ function appendExcelClassificationSheet(
 
   for (let rowNumber = 9; rowNumber <= lastRow; rowNumber += 1) {
     sheet.getCell(`D${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00';
-    // Right-align the date column (B) so the dates line up on the right like the
-    // rest of the RTL sheet instead of defaulting to left. Presentation only.
-    sheet.getCell(`B${rowNumber}`).alignment = { horizontal: "right", vertical: "middle" };
+    // Right-align every body cell (columns A-L) so the whole table reads from the
+    // right (RTL), as requested. The header row (8) is intentionally left untouched.
+    // Presentation only — no value, formula or validation is affected.
+    for (let col = 1; col <= 12; col += 1) {
+      sheet.getCell(rowNumber, col).alignment = { horizontal: "right", vertical: "middle" };
+    }
     sheet.getCell(`E${rowNumber}`).dataValidation = {
       allowBlank: false,
       formulae: ['"הוצאה,הכנסה"'],
