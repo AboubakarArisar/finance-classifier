@@ -1172,23 +1172,50 @@ function appendExcelClassificationSheet(
     }
   }
 
-  // When a row's main category is "לא לסיווג" it has no sub-category and is kept
-  // out of the totals, so both G and H for that row are shown white instead of the
-  // mint editable tint — a visual cue that the row carries no classification. This
-  // is live conditional formatting that follows the dropdown; it changes no value,
-  // formula or total. ($G locks the column, the row is relative so each line tests
-  // its own G cell.)
+  // Direction-based colour coding for the three classification columns, as the
+  // client asked (the header titles in row 8 are left untouched):
+  //   • הכנסה  (income)  → soft blue fill  + bold blue text
+  //   • הוצאה  (expense) → soft pink fill  + bold burgundy text
+  //   • לא לסיווג (uncategorised, either direction) → bold yellow fill + black text
+  // These are live conditional-formatting rules keyed off the direction (E) and the
+  // main-category (G) cells — they change no value, formula or total. Lower priority
+  // numbers win, so the uncategorised rule (priority 3) overrides the income/expense
+  // colours on the category cells. Fills use bgColor (the OOXML dxf convention).
+  const incomeFillArgb = reportTheme.incomeChipFill; // soft blue
+  const incomeTextArgb = reportTheme.incomeChipText; // bold navy blue
+  const expenseFillArgb = reportTheme.expenseChipFill; // soft pink
+  const expenseTextArgb = "FF9C0006"; // bold burgundy
+  const uncategorizedFillArgb = reportTheme.balanceFill; // bold yellow
+  const uncategorizedTextArgb = "FF000000"; // black
+  const cfFill = (argb: string) => ({ type: "pattern" as const, pattern: "solid" as const, bgColor: { argb } });
+  const cfDirection = (fillArgb: string, textArgb: string) => ({
+    fill: cfFill(fillArgb),
+    font: { bold: true, color: { argb: textArgb } },
+  });
+
+  // הוצאה/הכנסה column (E): fill + bold text by direction.
+  sheet.addConditionalFormatting({
+    ref: `E9:E${lastRow}`,
+    rules: [
+      { type: "expression", formulae: [`$E9="הכנסה"`], priority: 1, style: cfDirection(incomeFillArgb, incomeTextArgb) },
+      { type: "expression", formulae: [`$E9="הוצאה"`], priority: 2, style: cfDirection(expenseFillArgb, expenseTextArgb) },
+    ],
+  });
+
+  // סעיף ראשי (G) and שם סעיף (H): same income/expense colours, but an
+  // uncategorised row (G="לא לסיווג") overrides them to yellow fill + black text.
   sheet.addConditionalFormatting({
     ref: `G9:H${lastRow}`,
     rules: [
       {
+        // "bold yellow background with standard (non-bold) black text".
         type: "expression",
         formulae: [`$G9="${notForClassificationLabel}"`],
-        priority: 1,
-        style: {
-          fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFFFFFF" } },
-        },
+        priority: 3,
+        style: { fill: cfFill(uncategorizedFillArgb), font: { bold: false, color: { argb: uncategorizedTextArgb } } },
       },
+      { type: "expression", formulae: [`$E9="הכנסה"`], priority: 4, style: cfDirection(incomeFillArgb, incomeTextArgb) },
+      { type: "expression", formulae: [`$E9="הוצאה"`], priority: 5, style: cfDirection(expenseFillArgb, expenseTextArgb) },
     ],
   });
 }
