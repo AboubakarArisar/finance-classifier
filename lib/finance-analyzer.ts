@@ -252,7 +252,7 @@ export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Pro
   }
 
   const reportBuffer = await buildReportWorkbook(transactions, sheetSummaries);
-  const fileName = `Benny-Vazana-Finance-${jobId}.xlsx`;
+  const fileName = "Benny-Vazana-Finance.xlsx";
   await writeFile(path.join(jobDir, "report.xlsx"), reportBuffer);
 
   return {
@@ -1098,9 +1098,21 @@ function appendExcelClassificationSheet(
   // Row 6 is the "you can edit the dropdowns" note; row 7 is the table banner.
   sheet.getCell("A6").font = { italic: true, color: { argb: reportTheme.noteText } };
   sheet.getCell("A7").font = { bold: true, size: 12, color: { argb: reportTheme.titleText } };
+  // The two long KPI labels ("ממוצע הוצאות בחודש" / "ממוצע הכנסות בחודש") sit next
+  // to a value chip, so they can't overflow and were being clipped. Let them wrap
+  // inside column A and give their rows enough height to show both lines. Also give
+  // the note row (6) room so its full sentence is visible. Presentation only.
+  ["A3", "A4"].forEach((cellAddress) => {
+    sheet.getCell(cellAddress).alignment = { vertical: "middle", wrapText: true };
+  });
+  sheet.getRow(3).height = 30;
+  sheet.getRow(4).height = 30;
 
   for (let rowNumber = 9; rowNumber <= lastRow; rowNumber += 1) {
     sheet.getCell(`D${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00';
+    // Right-align the date column (B) so the dates line up on the right like the
+    // rest of the RTL sheet instead of defaulting to left. Presentation only.
+    sheet.getCell(`B${rowNumber}`).alignment = { horizontal: "right", vertical: "middle" };
     sheet.getCell(`E${rowNumber}`).dataValidation = {
       allowBlank: false,
       formulae: ['"הוצאה,הכנסה"'],

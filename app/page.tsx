@@ -426,8 +426,8 @@ export default function Home() {
             ) : null}
 
             {/* Footer actions */}
-            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border/60 pt-5">
-             <a
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-5">
+              <a
                 href="https://wa.me/972507817032?text=%D7%90%D7%A0%D7%99%20%D7%A0%D7%9E%D7%A6%D7%90%20%D7%91%D7%9E%D7%A2%D7%A8%D7%9B%D7%AA%20%D7%94%D7%A9%D7%99%D7%A7%D7%95%D7%A3%20%D7%A9%D7%9C%D7%9A%20%D7%95%D7%90%D7%A0%D7%99%20%D7%A6%D7%A8%D7%99%D7%9A%20%D7%A2%D7%96%D7%A8%D7%94%20%D7%98%D7%9B%D7%A0%D7%99%D7%AA"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -439,6 +439,7 @@ export default function Home() {
                 </svg>
                 <span>צרו קשר בוואטסאפ</span>
               </a>
+              <div className="flex items-center gap-3">
               {result ? (
                 <button
                   className="inline-flex h-12 items-center justify-center gap-2 rounded-pill bg-primary px-8 text-base font-semibold text-surface transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
@@ -466,7 +467,7 @@ export default function Home() {
               >
                 {result ? "סיווג חדש" : "ביטול"}
               </button>
-              
+              </div>
             </div>
           </form>
         </section>
