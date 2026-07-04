@@ -1029,7 +1029,7 @@ function appendExcelClassificationSheet(
   // "לשימוש פנימי" helper columns. Hiding keeps the user-facing sheet clean while
   // every formula keeps working; the user can unhide any of them in Excel.
   sheet.columns = [
-    { width: 14 }, // A מקור
+    { width: 22 }, // A מקור (also holds the KPI labels in rows 1-5, so wide enough for "ממוצע הוצאות בחודש" on one line)
     { width: 12 }, // B תאריך
     { width: 34 }, // C תיאור / שם בית העסק
     { width: 14 }, // D סכום
@@ -1099,14 +1099,11 @@ function appendExcelClassificationSheet(
   sheet.getCell("A6").font = { italic: true, color: { argb: reportTheme.noteText } };
   sheet.getCell("A7").font = { bold: true, size: 12, color: { argb: reportTheme.titleText } };
   // The two long KPI labels ("ממוצע הוצאות בחודש" / "ממוצע הכנסות בחודש") sit next
-  // to a value chip, so they can't overflow and were being clipped. Let them wrap
-  // inside column A and give their rows enough height to show both lines. Also give
-  // the note row (6) room so its full sentence is visible. Presentation only.
+  // to a value chip, so they can't overflow. Column A is widened above so they fit
+  // on a single line; keep them unwrapped on default-height rows. Presentation only.
   ["A3", "A4"].forEach((cellAddress) => {
-    sheet.getCell(cellAddress).alignment = { vertical: "middle", wrapText: true };
+    sheet.getCell(cellAddress).alignment = { vertical: "middle", wrapText: false };
   });
-  sheet.getRow(3).height = 30;
-  sheet.getRow(4).height = 30;
 
   for (let rowNumber = 9; rowNumber <= lastRow; rowNumber += 1) {
     sheet.getCell(`D${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00';
