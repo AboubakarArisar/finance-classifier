@@ -1368,7 +1368,13 @@ function appendExcelResultSheet(
   // classification workflow; it only aggregates values for the charts to plot.
   // These row positions must match getResultSheetMainCategoryChartRefs().
   const summaryNumberFormat = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
-  const writeMainCategoryTotals = (groups: CategoryGroup[], valueColumn: string, startRow: number) => {
+  // Colour the main-category names in the G column by direction, matching the
+  // classification sheet: expenses read burgundy, income reads navy blue. Text
+  // only — no cell background — as the client asked. Presentation only; the
+  // value/formula in each cell is untouched.
+  const expenseCategoryTextArgb = "FF9C0006"; // bold burgundy (same as sheet 1)
+  const incomeCategoryTextArgb = reportTheme.incomeChipText; // bold navy blue
+  const writeMainCategoryTotals = (groups: CategoryGroup[], valueColumn: string, startRow: number, textArgb: string) => {
     let blockRow = firstDataRow;
     let aggRow = startRow;
     for (const group of groups) {
@@ -1377,7 +1383,7 @@ function appendExcelResultSheet(
         const blockStart = blockRow;
         const blockEnd = blockRow + count - 1;
         sheet.getCell(`G${aggRow}`).value = group.mainCategory;
-        sheet.getCell(`G${aggRow}`).font = { bold: true, color: { argb: reportTheme.titleText } };
+        sheet.getCell(`G${aggRow}`).font = { bold: true, color: { argb: textArgb } };
         sheet.getCell(`H${aggRow}`).value = {
           formula: `SUM(${valueColumn}${blockStart}:${valueColumn}${blockEnd})`,
           result: sumCategoryAverages(group.subCategories, averages),
@@ -1389,8 +1395,8 @@ function appendExcelResultSheet(
     }
     return aggRow;
   };
-  const incomeSummaryStart = writeMainCategoryTotals(getCategoryGroups(0, 16), "B", firstDataRow) + 1;
-  writeMainCategoryTotals(getCategoryGroups(16, 19), "E", incomeSummaryStart);
+  const incomeSummaryStart = writeMainCategoryTotals(getCategoryGroups(0, 16), "B", firstDataRow, expenseCategoryTextArgb) + 1;
+  writeMainCategoryTotals(getCategoryGroups(16, 19), "E", incomeSummaryStart, incomeCategoryTextArgb);
 }
 
 function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
