@@ -244,7 +244,7 @@ export async function analyzeFinancialStatements(files: UploadedWorkbook[]): Pro
       return `בנק-${bankSheetNumber++}`;
     }),
   );
-  const transactions = parsedWorkbooks.flatMap((workbook) => workbook.transactions);
+  const transactions = dedupeTransactions(parsedWorkbooks.flatMap((workbook) => workbook.transactions));
   const sheetSummaries = parsedWorkbooks.flatMap((workbook) => workbook.summaries);
 
   if (transactions.length === 0) {
@@ -366,6 +366,45 @@ function parseWorkbook(
   });
 
   return { summaries, transactions };
+}
+
+// Remove exact-duplicate transactions across every parsed sheet and file.
+// The same charge can reach the combined list more than once — overlapping
+// monthly statements list the same instalment ("תשלום 10 מתוך 12"), and a file
+// selected twice by mistake feeds identical rows in — which showed the client
+// the same line (same date, amount, description, note and card) twice in the
+// report and in every total and chart built from it. Two rows are treated as
+// the same transaction only when EVERY source field matches, so genuinely
+// distinct movements are always kept; the first occurrence wins so ordering is
+// preserved. Parsing itself is untouched — this only drops proven duplicates
+// before the report is built, so it applies to any bank/credit file, any user.
+function dedupeTransactions(transactions: NormalizedTransaction[]): NormalizedTransaction[] {
+  const seen = new Set<string>();
+  const unique: NormalizedTransaction[] = [];
+
+  for (const transaction of transactions) {
+    // The source-sheet label (sourceName) is deliberately excluded: the whole
+    // point is to collapse the same charge that arrived under two labels.
+    const identity = [
+      transaction.date,
+      transaction.amount,
+      transaction.direction,
+      transaction.description,
+      transaction.note,
+      transaction.cardOrAccount,
+      transaction.chargeCurrency,
+      transaction.originalAmount,
+    ].join("");
+
+    if (seen.has(identity)) {
+      continue;
+    }
+
+    seen.add(identity);
+    unique.push(transaction);
+  }
+
+  return unique;
 }
 
 function parseCreditSheet(
