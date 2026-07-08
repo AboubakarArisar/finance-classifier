@@ -859,6 +859,7 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
 
   appendExcelClassificationSheet(workbook, sortedTransactions, monthCount);
   appendExcelResultSheet(workbook, sortedTransactions, monthCount);
+  appendExcelGraphSheets(workbook);
   appendExcelSummarySheet(workbook, summaries);
   appendExcelCategorySheet(workbook);
   appendExcelImportSheet(workbook, sortedTransactions);
@@ -866,14 +867,15 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
   sanitizeWorkbookForExcel(workbook);
 
   const buffer = await workbook.xlsx.writeBuffer();
-  // ExcelJS can't emit native charts, so inject one live pie per main category
-  // (subcategory breakdown) onto the result sheet after the fact. This only
-  // references existing ranges — no cell, formula or validation is changed.
-  const withCharts = await injectCategoryPieCharts(
-    Buffer.from(buffer),
-    resultSheetName,
-    getResultSheetCategoryCharts(),
-  );
+  // ExcelJS can't emit native charts, so inject the live pies after the fact,
+  // onto their own two graphical-view sheets: one for income, one for expenses.
+  // Each sheet gets the big overview pie plus a pie per main category (its
+  // subcategory breakdown). This only references existing ranges on the result
+  // sheet — no cell, formula or validation is changed.
+  const withCharts = await injectCategoryPieCharts(Buffer.from(buffer), [
+    { sheetName: incomeGraphSheetName, charts: getIncomeGraphCharts() },
+    { sheetName: expenseGraphSheetName, charts: getExpenseGraphCharts() },
+  ]);
   return withCharts;
 }
 
@@ -1261,59 +1263,139 @@ function appendExcelClassificationSheet(
 const resultSheetName = "תוצאות השיקוף";
 const resultFirstDataRow = 4;
 
+// The charts live on their own dedicated sheets (see appendExcelGraphSheets) so
+// the result sheet stays a clean table. Every chart still *references* the
+// result-sheet ranges below, so no number, formula or layout on that sheet moves.
+const incomeGraphSheetName = "תצוגה גרפית – הכנסות";
+const expenseGraphSheetName = "תצוגה גרפית – הוצאות";
+
 // One pie per main category: each main category's subcategories sit in a
 // contiguous block on the result sheet (column A/B for expenses, D/E for
 // income), in catalog order with no gaps — exactly how appendExcelResultSheet
 // lays them out. We walk the catalog the same way to recover each block's range.
-function getResultSheetCategoryCharts(): CategoryPieChart[] {
+function getCategoryBlockCharts(
+  groups: CategoryGroup[],
+  labelColumn: string,
+  valueColumn: string,
+): CategoryPieChart[] {
   const sheetRef = `'${resultSheetName}'`;
   const charts: CategoryPieChart[] = [];
-
-  const addBlocks = (groups: CategoryGroup[], labelColumn: string, valueColumn: string) => {
-    let row = resultFirstDataRow;
-    for (const group of groups) {
-      const count = group.subCategories.length;
-      if (count > 0) {
-        const start = row;
-        const end = row + count - 1;
-        charts.push({
-          title: group.mainCategory,
-          catRef: `${sheetRef}!$${labelColumn}$${start}:$${labelColumn}$${end}`,
-          valRef: `${sheetRef}!$${valueColumn}$${start}:$${valueColumn}$${end}`,
-        });
-      }
-      row += count;
+  let row = resultFirstDataRow;
+  for (const group of groups) {
+    const count = group.subCategories.length;
+    if (count > 0) {
+      const start = row;
+      const end = row + count - 1;
+      charts.push({
+        title: group.mainCategory,
+        catRef: `${sheetRef}!$${labelColumn}$${start}:$${labelColumn}$${end}`,
+        valRef: `${sheetRef}!$${valueColumn}$${start}:$${valueColumn}$${end}`,
+      });
     }
+    row += count;
+  }
+  return charts;
+}
+
+// The two big overview pies plot the aggregate main-category block that
+// appendExcelResultSheet writes into columns G/H: expenses first, then a one-row
+// gap, then income (same layout the result-sheet summary already relies on).
+function getExpenseSummaryChart(): CategoryPieChart {
+  const sheetRef = `'${resultSheetName}'`;
+  const expenseMainCount = getCategoryGroups(0, 16).filter((group) => group.subCategories.length > 0).length;
+  const start = resultFirstDataRow;
+  const end = start + expenseMainCount - 1;
+  return {
+    title: "הוצאות",
+    catRef: `${sheetRef}!$G$${start}:$G$${end}`,
+    valRef: `${sheetRef}!$H$${start}:$H$${end}`,
+    variant: "summary",
   };
+}
 
-  // Expenses fill columns A (labels) / B (values); income fills D / E.
-  addBlocks(getCategoryGroups(0, 16), "A", "B");
-  addBlocks(getCategoryGroups(16, 19), "D", "E");
-
-  // Two big summary pies (expenses / income by MAIN category), plotting the
-  // aggregate block appendExcelResultSheet writes into columns G/H. Placed side
-  // by side across the top of the chart area; the per-category pies flow below.
+function getIncomeSummaryChart(): CategoryPieChart {
+  const sheetRef = `'${resultSheetName}'`;
   const expenseMainCount = getCategoryGroups(0, 16).filter((group) => group.subCategories.length > 0).length;
   const incomeMainCount = getCategoryGroups(16, 19).filter((group) => group.subCategories.length > 0).length;
-  const expenseStart = resultFirstDataRow;
-  const expenseEnd = expenseStart + expenseMainCount - 1;
-  const incomeStart = expenseEnd + 2; // one gap row between the two blocks
-  const incomeEnd = incomeStart + incomeMainCount - 1;
-  charts.push({
-    title: "הוצאות",
-    catRef: `${sheetRef}!$G$${expenseStart}:$G$${expenseEnd}`,
-    valRef: `${sheetRef}!$H$${expenseStart}:$H$${expenseEnd}`,
-    variant: "summary",
-    anchor: { fromCol: 9, fromRow: 0, toCol: 19, toRow: 20 },
-  });
-  charts.push({
+  const expenseEnd = resultFirstDataRow + expenseMainCount - 1;
+  const start = expenseEnd + 2; // one gap row between the expense and income blocks
+  const end = start + incomeMainCount - 1;
+  return {
     title: "הכנסות",
-    catRef: `${sheetRef}!$G$${incomeStart}:$G$${incomeEnd}`,
-    valRef: `${sheetRef}!$H$${incomeStart}:$H$${incomeEnd}`,
+    catRef: `${sheetRef}!$G$${start}:$G$${end}`,
+    valRef: `${sheetRef}!$H$${start}:$H$${end}`,
     variant: "summary",
-    anchor: { fromCol: 20, fromRow: 0, toCol: 30, toRow: 20 },
+  };
+}
+
+// Lay out one graphical-view sheet: the big overview pie across the top, then
+// the per-category pies in a three-wide grid below it. Anchors are the only
+// thing set here — the charts still reference the result-sheet ranges.
+function layoutGraphSheetCharts(
+  summary: CategoryPieChart,
+  perCategory: CategoryPieChart[],
+): CategoryPieChart[] {
+  const gridColumns = 3;
+  const chartColSpan = 7; // each pie occupies 7 columns…
+  const chartRowSpan = 16; // …and 16 rows
+  const colStride = chartColSpan + 1; // +1 column gutter
+  const rowStride = chartRowSpan + 1; // +1 row gutter
+  const gridStartRow = 26; // below the big overview pie at the top
+
+  const summaryChart: CategoryPieChart = {
+    ...summary,
+    anchor: { fromCol: 1, fromRow: 2, toCol: 13, toRow: 24 },
+  };
+  const laidOut = perCategory.map((chart, index) => {
+    const gridCol = index % gridColumns;
+    const gridRow = Math.floor(index / gridColumns);
+    const fromCol = gridCol * colStride;
+    const fromRow = gridStartRow + gridRow * rowStride;
+    return {
+      ...chart,
+      anchor: { fromCol, fromRow, toCol: fromCol + chartColSpan, toRow: fromRow + chartRowSpan },
+    };
   });
-  return charts;
+  return [summaryChart, ...laidOut];
+}
+
+function getIncomeGraphCharts(): CategoryPieChart[] {
+  // Income subcategory blocks fill columns D (labels) / E (values).
+  return layoutGraphSheetCharts(
+    getIncomeSummaryChart(),
+    getCategoryBlockCharts(getCategoryGroups(16, 19), "D", "E"),
+  );
+}
+
+function getExpenseGraphCharts(): CategoryPieChart[] {
+  // Expense subcategory blocks fill columns A (labels) / B (values).
+  return layoutGraphSheetCharts(
+    getExpenseSummaryChart(),
+    getCategoryBlockCharts(getCategoryGroups(0, 16), "A", "B"),
+  );
+}
+
+// Two chart-only sheets that hold the live pies (injected later by
+// injectCategoryPieCharts): one for income, one for expenses. They carry nothing
+// but a themed title row — the pies reference the result sheet's ranges, so no
+// data or formula lives here. Grid lines are hidden so the sheet reads as a
+// clean canvas of graphs, matching the client's request.
+function appendExcelGraphSheets(workbook: ExcelJS.Workbook) {
+  const buildGraphSheet = (name: string, titleFill: string) => {
+    const sheet = workbook.addWorksheet(name, {
+      views: [{ rightToLeft: true, showGridLines: false }],
+    });
+    sheet.mergeCells("A1:M1");
+    const title = sheet.getCell("A1");
+    title.value = name;
+    title.font = { bold: true, size: 16, color: { argb: reportTheme.headerText } };
+    title.alignment = { horizontal: "center", vertical: "middle" };
+    title.fill = { type: "pattern", pattern: "solid", fgColor: { argb: titleFill } };
+    sheet.getRow(1).height = 30;
+  };
+  // Income first, then expenses — the order the client asked for.
+  buildGraphSheet(incomeGraphSheetName, reportTheme.incomeFill);
+  buildGraphSheet(expenseGraphSheetName, reportTheme.expenseFill);
 }
 
 function appendExcelResultSheet(

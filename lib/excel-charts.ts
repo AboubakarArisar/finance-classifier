@@ -172,14 +172,17 @@ function buildDrawingXml(charts: CategoryPieChart[]) {
   );
 }
 
-function buildDrawingRels(count: number) {
+// One drawing owns several charts; its rels map the drawing's local rIds to the
+// global chart part numbers (chart parts are numbered across ALL sheets so two
+// drawings never point at the same chartN.xml).
+function buildDrawingRels(chartNumbers: number[]) {
   let relationships = "";
-  for (let index = 0; index < count; index += 1) {
+  chartNumbers.forEach((chartNumber, index) => {
     relationships +=
       `<Relationship Id="rId${index + 1}"` +
       ' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"' +
-      ` Target="../charts/chart${index + 1}.xml"/>`;
-  }
+      ` Target="../charts/chart${chartNumber}.xml"/>`;
+  });
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
@@ -207,12 +210,20 @@ function resolveSheetPath(workbookXml: string, workbookRels: string, sheetName: 
   return target.startsWith("xl/") ? target : `xl/${target}`;
 }
 
+// A set of charts to inject onto one worksheet. Each sheet gets its own drawing
+// part; the charts only reference ranges that already exist on the workbook, so
+// they can live on a different sheet than the data they plot.
+export type ChartSheetGroup = {
+  sheetName: string;
+  charts: CategoryPieChart[];
+};
+
 export async function injectCategoryPieCharts(
   buffer: Buffer,
-  sheetName: string,
-  charts: CategoryPieChart[],
+  groups: ChartSheetGroup[],
 ): Promise<Buffer> {
-  if (charts.length === 0) {
+  const activeGroups = groups.filter((group) => group.charts.length > 0);
+  if (activeGroups.length === 0) {
     return buffer;
   }
 
@@ -224,75 +235,84 @@ export async function injectCategoryPieCharts(
     return buffer;
   }
 
-  const sheetPath = resolveSheetPath(workbookXml, workbookRels, sheetName);
-  if (!sheetPath) {
-    return buffer;
-  }
+  // Chart parts are numbered globally and drawings sequentially, so injecting
+  // onto several sheets never collides on chartN.xml / drawingN.xml.
+  let chartCounter = 0;
+  let drawingCounter = 0;
+  let contentOverrides = "";
 
-  const sheetXml = await zip.file(sheetPath)?.async("string");
-  if (!sheetXml) {
-    return buffer;
-  }
+  for (const group of activeGroups) {
+    const sheetPath = resolveSheetPath(workbookXml, workbookRels, group.sheetName);
+    if (!sheetPath) {
+      continue;
+    }
+    const sheetXml = await zip.file(sheetPath)?.async("string");
+    if (!sheetXml) {
+      continue;
+    }
 
-  // Chart/drawing part numbers — start past anything already present so we never
-  // collide with parts ExcelJS may have written (it currently writes none).
-  const drawingIndex = 1;
-  const drawingPath = `xl/drawings/drawing${drawingIndex}.xml`;
+    drawingCounter += 1;
+    const drawingIndex = drawingCounter;
+    const drawingPath = `xl/drawings/drawing${drawingIndex}.xml`;
 
-  // 1. chart parts
-  charts.forEach((chart, index) => {
-    zip.file(`xl/charts/chart${index + 1}.xml`, buildChartXml(chart));
-  });
+    // 1. chart parts (globally-unique numbers)
+    const chartNumbers = group.charts.map(() => {
+      chartCounter += 1;
+      return chartCounter;
+    });
+    group.charts.forEach((chart, index) => {
+      zip.file(`xl/charts/chart${chartNumbers[index]}.xml`, buildChartXml(chart));
+    });
 
-  // 2. drawing part + its rels
-  zip.file(drawingPath, buildDrawingXml(charts));
-  zip.file(`xl/drawings/_rels/drawing${drawingIndex}.xml.rels`, buildDrawingRels(charts.length));
+    // 2. drawing part + its rels
+    zip.file(drawingPath, buildDrawingXml(group.charts));
+    zip.file(`xl/drawings/_rels/drawing${drawingIndex}.xml.rels`, buildDrawingRels(chartNumbers));
 
-  // 3. sheet → drawing relationship
-  const sheetRelsPath = sheetPath.replace(/worksheets\/([^/]+)$/, "worksheets/_rels/$1.rels");
-  const existingSheetRels = await zip.file(sheetRelsPath)?.async("string");
-  let drawingRelId = "rId1";
-  if (existingSheetRels) {
-    const ids = [...existingSheetRels.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1]));
-    const nextId = (ids.length ? Math.max(...ids) : 0) + 1;
-    drawingRelId = `rId${nextId}`;
-    const updated = existingSheetRels.replace(
-      "</Relationships>",
-      `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawingIndex}.xml"/></Relationships>`,
-    );
-    zip.file(sheetRelsPath, updated);
-  } else {
-    zip.file(
-      sheetRelsPath,
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-        `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawingIndex}.xml"/>` +
+    // 3. sheet → drawing relationship
+    const sheetRelsPath = sheetPath.replace(/worksheets\/([^/]+)$/, "worksheets/_rels/$1.rels");
+    const existingSheetRels = await zip.file(sheetRelsPath)?.async("string");
+    let drawingRelId = "rId1";
+    if (existingSheetRels) {
+      const ids = [...existingSheetRels.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1]));
+      const nextId = (ids.length ? Math.max(...ids) : 0) + 1;
+      drawingRelId = `rId${nextId}`;
+      const updated = existingSheetRels.replace(
         "</Relationships>",
-    );
+        `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawingIndex}.xml"/></Relationships>`,
+      );
+      zip.file(sheetRelsPath, updated);
+    } else {
+      zip.file(
+        sheetRelsPath,
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+          `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${drawingIndex}.xml"/>` +
+          "</Relationships>",
+      );
+    }
+
+    // 4. <drawing> element on the worksheet (just before </worksheet>, which
+    //    puts it after pageSetup — the schema-correct position).
+    if (!/<drawing\s/.test(sheetXml)) {
+      const updatedSheet = sheetXml.replace(
+        "</worksheet>",
+        `<drawing r:id="${drawingRelId}"/></worksheet>`,
+      );
+      zip.file(sheetPath, updatedSheet);
+    }
+
+    // 5. accumulate content-type overrides for this group's new parts
+    contentOverrides += `<Override PartName="/${drawingPath}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`;
+    chartNumbers.forEach((chartNumber) => {
+      contentOverrides += `<Override PartName="/xl/charts/chart${chartNumber}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`;
+    });
   }
 
-  // 4. <drawing> element on the worksheet (just before </worksheet>, which puts
-  //    it after pageSetup — the schema-correct position).
-  if (!/<drawing\s/.test(sheetXml)) {
-    const updatedSheet = sheetXml.replace(
-      "</worksheet>",
-      `<drawing r:id="${drawingRelId}"/></worksheet>`,
-    );
-    zip.file(sheetPath, updatedSheet);
-  }
-
-  // 5. content-type overrides for the new parts
+  // 6. content-type overrides (written once for every injected part)
   const contentTypesPath = "[Content_Types].xml";
   const contentTypes = await zip.file(contentTypesPath)?.async("string");
-  if (contentTypes) {
-    let overrides = "";
-    if (!contentTypes.includes(`PartName="/${drawingPath}"`)) {
-      overrides += `<Override PartName="/${drawingPath}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`;
-    }
-    charts.forEach((_, index) => {
-      overrides += `<Override PartName="/xl/charts/chart${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`;
-    });
-    const updatedTypes = contentTypes.replace("</Types>", `${overrides}</Types>`);
+  if (contentTypes && contentOverrides) {
+    const updatedTypes = contentTypes.replace("</Types>", `${contentOverrides}</Types>`);
     zip.file(contentTypesPath, updatedTypes);
   }
 
