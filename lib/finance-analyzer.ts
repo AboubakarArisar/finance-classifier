@@ -1528,8 +1528,26 @@ function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
   sheet.addRows(rows);
   sheet.columns = rows[0].map(() => ({ width: 22 }));
   styleHeaderRow(sheet.getRow(1));
-  // Distinguish this behind-the-scenes category list with the lighter teal shade.
-  sheet.getRow(1).fill = { fgColor: { argb: reportTheme.subHeaderFill }, pattern: "solid", type: "pattern" };
+  // Colour each main-category header by its direction, matching the result
+  // sheet's scheme: expense sections orange, income sections blue, and the
+  // special "לא לסיווג" column yellow. buildCategorySheetRows lays the header
+  // out in categoryCatalog order (expenses 0-15, income 16-18, "לא לסיווג"
+  // last), so the column index maps straight onto the direction. This only sets
+  // fills and font colours on the header row — no text, value or column moves.
+  const headerRow = sheet.getRow(1);
+  categoryCatalog.forEach((group, index) => {
+    const cell = headerRow.getCell(index + 1);
+    if (group.mainCategory === notForClassificationLabel) {
+      cell.fill = { fgColor: { argb: reportTheme.balanceFill }, pattern: "solid", type: "pattern" };
+      cell.font = { bold: true, color: { argb: reportTheme.balanceText } };
+    } else if (index < 16) {
+      cell.fill = { fgColor: { argb: reportTheme.expenseFill }, pattern: "solid", type: "pattern" };
+      cell.font = { bold: true, color: { argb: reportTheme.headerText } };
+    } else {
+      cell.fill = { fgColor: { argb: reportTheme.incomeFill }, pattern: "solid", type: "pattern" };
+      cell.font = { bold: true, color: { argb: reportTheme.headerText } };
+    }
+  });
 }
 
 function appendExcelImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
