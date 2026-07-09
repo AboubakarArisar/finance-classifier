@@ -552,8 +552,13 @@ function parseBankSheet(
     .slice(headerIndex + 1)
     .map<NormalizedTransaction | null>((row) => {
       const description = readRowText(row, indexes.description);
-      const debit = readRowNumber(row, indexes.debit);
-      const credit = readRowNumber(row, indexes.credit);
+      // Banks fill the unused side of the debit/credit pair with a literal 0
+      // (e.g. Bank Yahav writes חובה(₪)="0" on an income line) rather than
+      // leaving it blank, so a 0 here means "no value" — treating it otherwise
+      // would read every income line as a 0.00 expense. The populated side is
+      // both the amount and the direction signal.
+      const debit = readRowNumber(row, indexes.debit) || null;
+      const credit = readRowNumber(row, indexes.credit) || null;
       const amount = debit ?? credit;
 
       if (!description || amount === null) {
