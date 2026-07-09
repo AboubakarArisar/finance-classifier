@@ -328,12 +328,55 @@ async function loadMappings(): Promise<MappingRule[]> {
   return mappedRows.length > 0 ? [...mappedRows, ...fallbackRules] : fallbackRules;
 }
 
+// Read an uploaded statement into a workbook, decoding every ".xls" flavour that
+// Israeli banks emit — not just modern .xlsx.
+//
+// A .xlsx file stores its text as Unicode, so it always decodes cleanly. The
+// files that fail are the ".xls" ones, and "\.xls" is not one format but several,
+// each of which stores Hebrew differently:
+//   • a real binary workbook (legacy BIFF) whose Hebrew is in the Windows-1255
+//     code page;
+//   • an HTML table saved with an .xls extension (the most common bank export),
+//     usually Windows-1255 with no declared charset, sometimes UTF-8;
+//   • an XML-Spreadsheet-2003 document, likewise Windows-1255.
+// For every one of those, SheetJS's default decoding turns the Hebrew header row
+// (תאריך / הפעולה / חובה / זכות) into gibberish, so the transaction table is
+// never matched and the upload is wrongly rejected as "no transactions found" —
+// even though it is an ordinary Excel statement. That is why the exact same data
+// fails as .xls but works once re-saved as .xlsx.
+//
+// We dispatch on the file's magic bytes so each flavour is decoded with the right
+// charset, and real .xlsx keeps flowing through the untouched binary path:
+//   • "PK" (0x50 0x4B)      → a real .xlsx/.xlsm zip — read as-is (Unicode).
+//   • OLE2 (0xD0 0xCF)      → legacy binary .xls — read with the Hebrew code page.
+//   • anything else         → a text-based "Excel" file (HTML / XML-Spreadsheet):
+//     decode with the charset the markup declares, defaulting to Windows-1255
+//     (the bank default) when none is declared, then let SheetJS parse the text.
+function readUploadedWorkbook(buffer: Buffer): XLSX.WorkBook {
+  const isXlsxZip = buffer[0] === 0x50 && buffer[1] === 0x4b;
+  const isLegacyOle = buffer[0] === 0xd0 && buffer[1] === 0xcf;
+
+  if (!isXlsxZip && !isLegacyOle) {
+    const probe = buffer.subarray(0, 2048).toString("latin1").toLowerCase();
+    const hasUtf8Bom = buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
+    const declaresUtf8 = /charset\s*=\s*["']?utf-?8/.test(probe);
+    const text = hasUtf8Bom || declaresUtf8
+      ? buffer.toString("utf8")
+      : new TextDecoder("windows-1255").decode(buffer);
+    return XLSX.read(text, { cellDates: true, type: "string" });
+  }
+
+  // Unicode .xlsx ignores the code page; legacy BIFF .xls uses it so Hebrew stored
+  // in Windows-1255 decodes correctly instead of turning into gibberish.
+  return XLSX.read(buffer, { cellDates: true, codepage: 1255, type: "buffer" });
+}
+
 function parseWorkbook(
   file: UploadedWorkbook,
   mappings: MappingRule[],
   getNextSourceName: (kind: UploadKind) => string,
 ) {
-  const workbook = XLSX.read(file.buffer, { cellDates: true, type: "buffer" });
+  const workbook = readUploadedWorkbook(file.buffer);
   const summaries: ParsedSheetSummary[] = [];
   const transactions: NormalizedTransaction[] = [];
 
@@ -483,7 +526,13 @@ function parseBankSheet(
   mappings: MappingRule[],
   getSourceName: () => string,
 ): ParsedSheet {
-  const headerIndex = findHeaderRowIndex(rows, ["תאריך", "הפעולה", "חובה", "זכות"]);
+  // Banks label the transaction ("action") column differently — most use
+  // "הפעולה", Bank Yahav uses "תיאור פעולה" — so it is matched by alias. The
+  // debit/credit headers carry a currency suffix at some banks ("חובה(₪)"),
+  // which normalizeHeader strips, so the plain aliases still match.
+  const descriptionAliases = ["הפעולה", "תיאור פעולה", "תיאור", "פרטי הפעולה"];
+  const detailsAliases = ["פרטים", "אסמכתא", "פרטים נוספים"];
+  const headerIndex = findHeaderRowIndex(rows, ["תאריך", descriptionAliases, "חובה", "זכות"]);
 
   if (headerIndex < 0) {
     return emptyParsedSheet(file, sheetName, "");
@@ -495,8 +544,8 @@ function parseBankSheet(
     credit: findHeaderIndex(headers, ["זכות"]),
     date: findHeaderIndex(headers, ["תאריך"]),
     debit: findHeaderIndex(headers, ["חובה"]),
-    description: findHeaderIndex(headers, ["הפעולה"]),
-    details: findHeaderIndex(headers, ["פרטים"]),
+    description: findHeaderIndex(headers, descriptionAliases),
+    details: findHeaderIndex(headers, detailsAliases),
   };
 
   const transactions = rows
@@ -1688,10 +1737,18 @@ function countDistinctMonths(transactions: NormalizedTransaction[]) {
   return months.size;
 }
 
-function findHeaderRowIndex(rows: unknown[][], requiredHeaders: string[]) {
+// Locate the header row of a statement table. Each required entry is either a
+// single header that must be present, or a list of interchangeable aliases of
+// which any one satisfies that requirement — so a column that different banks
+// label differently (e.g. the description column: "הפעולה" here, "תיאור פעולה"
+// at Bank Yahav) can still be recognised.
+function findHeaderRowIndex(rows: unknown[][], required: (string | string[])[]) {
   return rows.slice(0, 20).findIndex((row) => {
     const normalizedCells = row.map((cell) => normalizeHeader(String(cell ?? "")));
-    return requiredHeaders.every((header) => normalizedCells.includes(normalizeHeader(header)));
+    return required.every((entry) => {
+      const aliases = Array.isArray(entry) ? entry : [entry];
+      return aliases.some((alias) => normalizedCells.includes(normalizeHeader(alias)));
+    });
   });
 }
 
@@ -1700,7 +1757,18 @@ function findHeaderIndex(headers: string[], aliases: string[]) {
 }
 
 function normalizeHeader(value: string) {
-  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase("he-IL");
+  return (
+    value
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLocaleLowerCase("he-IL")
+      // Some banks append the currency unit to amount headers, e.g. Bank Yahav
+      // writes "חובה(₪)" / "זכות(₪)" and others "יתרה (ש\"ח)". Strip a trailing
+      // currency parenthetical so those match the plain "חובה"/"זכות" aliases the
+      // parsers look for; headers without one are unaffected.
+      .replace(/\s*\(\s*(?:₪|ש["']?ח|nis|usd|eur|\$|€)\s*\)\s*$/i, "")
+      .trim()
+  );
 }
 
 function readObjectValue(row: Record<string, unknown>, candidates: string[]) {
