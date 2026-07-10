@@ -70,6 +70,10 @@ type CategoryGroup = {
 
 const jobsDir = getJobsDir();
 const mappingPath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "category-mapping.xlsx");
+// Three budget worksheets prepared by hand by the client, shipped verbatim into
+// every export (see appendBudgetTemplateSheets).
+const budgetTemplatePath = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "budget-sheets.xlsx");
+const budgetTemplateSheetNames = ["תקציב איזון", "תקציב בקרה", "תקציב הון"];
 const retentionMs = 30 * 24 * 60 * 60 * 1000;
 const excelExtensions = [".xls", ".xlsx", ".xlsm"];
 
@@ -914,6 +918,7 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
   appendExcelClassificationSheet(workbook, sortedTransactions, monthCount);
   appendExcelResultSheet(workbook, sortedTransactions, monthCount);
   appendExcelGraphSheets(workbook);
+  await appendBudgetTemplateSheets(workbook);
   appendExcelSummarySheet(workbook, summaries);
   appendExcelCategorySheet(workbook);
   appendExcelImportSheet(workbook, sortedTransactions);
@@ -1452,6 +1457,36 @@ function appendExcelGraphSheets(workbook: ExcelJS.Workbook) {
   buildGraphSheet(expenseGraphSheetName, reportTheme.expenseFill);
 }
 
+// The three budget worksheets (תקציב איזון / בקרה / הון) are prepared by hand by
+// the client and must appear verbatim in every export, right after the graphical
+// views. They are self-contained (no cross-sheet references), so they ship as a
+// static template on disk. We copy each sheet's model — values, formulas, styles,
+// column widths, RTL view — then re-apply the merges explicitly (the model setter
+// drops them) and re-assign the sheet id so it can't collide with the sheets
+// already in the workbook. Their own page setup is left untouched (see
+// sanitizeWorkbookForExcel) so the wide איזון sheet keeps the client's layout.
+async function appendBudgetTemplateSheets(workbook: ExcelJS.Workbook) {
+  const template = new ExcelJS.Workbook();
+  await template.xlsx.readFile(budgetTemplatePath);
+
+  for (const name of budgetTemplateSheetNames) {
+    const source = template.getWorksheet(name);
+    if (!source) {
+      continue;
+    }
+
+    const destination = workbook.addWorksheet(name, { properties: source.properties, views: source.views });
+    destination.model = { ...source.model, id: destination.id, name };
+    (source.model.merges ?? []).forEach((range) => {
+      try {
+        destination.mergeCells(range);
+      } catch {
+        // Range already recorded by the model copy — safe to ignore.
+      }
+    });
+  }
+}
+
 function appendExcelResultSheet(
   workbook: ExcelJS.Workbook,
   transactions: NormalizedTransaction[],
@@ -1696,6 +1731,10 @@ function buildCategorySheetRows() {
 
 function sanitizeWorkbookForExcel(workbook: ExcelJS.Workbook) {
   workbook.worksheets.forEach((sheet) => {
+    // Leave the hand-made budget templates exactly as the client built them.
+    if (budgetTemplateSheetNames.includes(sheet.name)) {
+      return;
+    }
     sheet.pageSetup = {
       fitToHeight: 0,
       fitToWidth: 0,
