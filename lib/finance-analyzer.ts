@@ -1552,7 +1552,7 @@ function appendExcelResultSheet(
   sheet.addRows([
     ["סה\"כ הוצאות", { formula: `SUM(B${firstDataRow}:B${lastDataRow})`, result: totalExpense }, "", "סה\"כ הכנסות", { formula: `SUM(E${firstDataRow}:E${lastDataRow})`, result: totalIncome }, "", "הפרש", { formula: "E1-B1", result: totalIncome - totalExpense }],
     [],
-    ["קטגוריות הוצאה", "ממוצע חודשי", "", "קטגוריות הכנסה", "ממוצע חודשי"],
+    ["קטגוריות הוצאה", "ממוצע חודשי", "", "קטגוריות הכנסה", "ממוצע חודשי", "", "סיכום קטגוריות", "ממוצע חודשי"],
   ]);
 
   for (let index = 0; index < maxRows; index += 1) {
@@ -1651,46 +1651,76 @@ function appendExcelResultSheet(
   const incomeSummaryStart = writeMainCategoryTotals(getCategoryGroups(0, 16), "B", firstDataRow, expenseCategoryTextArgb) + 1;
   const summaryEnd = writeMainCategoryTotals(getCategoryGroups(16, 19), "E", incomeSummaryStart, incomeCategoryTextArgb);
 
-  // Bordered category tables (client design): the header (row 1) and sub-header
-  // (row 3) cells are already boxed by styleHeaderRow. The data rows get only
-  // *vertical* borders (left/right) so each table reads as a framed two-column
-  // list separated by the zebra banding — not the full row-by-row grid the
-  // client rejected. The last row of each column also takes a bottom border to
-  // close the frame.
-  // Dark teal so the frame is clearly visible (the soft-slate border reads as
-  // invisible against the fills — the client asked for a visible border).
-  const vSide = { color: { argb: reportTheme.titleText }, style: "thin" as const };
-  const verticalBorder = (isLast: boolean) =>
-    isLast ? { bottom: vSide, left: vSide, right: vSide } : { left: vSide, right: vSide };
-  // Box the header (row 1) and sub-header (row 3) cells in the same dark colour so
-  // the whole table frame matches (styleHeaderRow drew them in the faint slate).
-  const boxBorder = { bottom: vSide, left: vSide, right: vSide, top: vSide };
-  (["A1", "B1", "D1", "E1", "G1", "H1", "A3", "B3", "D3", "E3"] as const).forEach((address) => {
-    sheet.getCell(address).border = boxBorder;
+  // The narrow C and F spacer columns between the three tables must stay a plain
+  // white gap — styleHeaderRow paints the whole header/sub-header row (including
+  // these empty cells) with the teal fill, so clear their fill and any border
+  // back to blank, as the client asked.
+  [3, 6].forEach((column) => {
+    [1, 3].forEach((rowNumber) => {
+      const cell = sheet.getCell(rowNumber, column);
+      cell.fill = { type: "pattern", pattern: "none" };
+      cell.border = {};
+    });
   });
+
+  // Bordered category tables (client design, reference image): each two-column
+  // table gets ONE continuous frame that starts at the header (row 1) and runs
+  // straight down to the table's last row — the spacer (row 2) and the
+  // sub-header (row 3) sit *inside* the frame, not outside it. The header and
+  // sub-header rows are closed with horizontal rules; the frame closes on the
+  // last row. Solid black, thin line — a light frame like the client's
+  // reference, not the heavy medium slab that read as night-and-day too bold.
+  const vSide = { color: { argb: "FF000000" }, style: "thin" as const };
+  const cellHasValue = (column: number, rowNumber: number) => {
+    const value = sheet.getCell(rowNumber, column).value;
+    return value !== null && value !== undefined && value !== "";
+  };
+  const frameTable = (columns: readonly number[], lastRow: number) => {
+    for (let rowNumber = 1; rowNumber <= lastRow; rowNumber += 1) {
+      const border: Partial<ExcelJS.Borders> = { left: vSide, right: vSide };
+      // Close the header (row 1) top and bottom. Close the sub-header (row 3)
+      // only where one actually exists — the A/B and D/E tables carry a
+      // sub-header, the G/H summary does not.
+      if (rowNumber === 1) {
+        border.top = vSide;
+        border.bottom = vSide;
+      }
+      if (rowNumber === 3 && cellHasValue(columns[0], 3)) {
+        border.top = vSide;
+        border.bottom = vSide;
+      }
+      if (rowNumber === lastRow) {
+        border.bottom = vSide;
+      }
+      for (const column of columns) {
+        sheet.getCell(rowNumber, column).border = border;
+      }
+    }
+  };
   const expenseLastRow = firstDataRow + expenseSubCategories.length - 1;
   const incomeLastRow = firstDataRow + incomeSubCategories.length - 1;
-  for (let rowNumber = firstDataRow; rowNumber <= expenseLastRow; rowNumber += 1) {
-    sheet.getCell(`A${rowNumber}`).border = verticalBorder(rowNumber === expenseLastRow);
-    sheet.getCell(`B${rowNumber}`).border = verticalBorder(rowNumber === expenseLastRow);
-  }
-  for (let rowNumber = firstDataRow; rowNumber <= incomeLastRow; rowNumber += 1) {
-    sheet.getCell(`D${rowNumber}`).border = verticalBorder(rowNumber === incomeLastRow);
-    sheet.getCell(`E${rowNumber}`).border = verticalBorder(rowNumber === incomeLastRow);
-  }
-  // The G/H summary can carry a blank spacer row between the expense and income
-  // blocks; border the whole span (spacer included) so the vertical frame stays
-  // continuous, then close it on the last populated row.
+  // The G/H summary carries a blank spacer between the expense and income
+  // blocks; close the frame on its last populated row (the last income main
+  // category) so the frame reaches the שכר / קצבאות / הכנסות שונות block.
   let summaryLastRow = firstDataRow;
   for (let rowNumber = firstDataRow; rowNumber <= summaryEnd; rowNumber += 1) {
-    const label = sheet.getCell(`G${rowNumber}`).value;
-    if (label !== null && label !== undefined && label !== "") {
+    if (cellHasValue(7, rowNumber)) {
       summaryLastRow = rowNumber;
     }
   }
-  for (let rowNumber = firstDataRow; rowNumber <= summaryLastRow; rowNumber += 1) {
-    sheet.getCell(`G${rowNumber}`).border = verticalBorder(rowNumber === summaryLastRow);
-    sheet.getCell(`H${rowNumber}`).border = verticalBorder(rowNumber === summaryLastRow);
+  frameTable([1, 2], expenseLastRow); // A/B — expense categories
+  frameTable([4, 5], incomeLastRow); // D/E — income categories
+  frameTable([7, 8], summaryLastRow); // G/H — הפרש summary
+
+  // The blank spacer (row 20) between the expense-summary and income-summary
+  // blocks gets horizontal dividers on both top and bottom — the lines that
+  // fence it off from פיננסים above and the שכר / קצבאות block below, per the
+  // reference. Keep its side borders.
+  const summarySpacerRow = incomeSummaryStart - 1;
+  if (summarySpacerRow > firstDataRow && summarySpacerRow < summaryLastRow) {
+    [7, 8].forEach((column) => {
+      sheet.getCell(summarySpacerRow, column).border = { top: vSide, bottom: vSide, left: vSide, right: vSide };
+    });
   }
 }
 
