@@ -1441,7 +1441,9 @@ function layoutGraphSheetCharts(
 
   const summaryChart: CategoryPieChart = {
     ...summary,
-    anchor: { fromCol: 1, fromRow: 2, toCol: 13, toRow: 24 },
+    // Centre the overview pie under the full-width banner (A→W, 0-based column
+    // boundaries 0→23): a width-13 chart with equal 5-column margins each side.
+    anchor: { fromCol: 5, fromRow: 2, toCol: 18, toRow: 24 },
   };
   const laidOut = perCategory.map((chart, index) => {
     const gridCol = index % gridColumns;
@@ -1487,7 +1489,7 @@ function appendExcelGraphSheets(workbook: ExcelJS.Workbook) {
     // glance without the tab reading too dark (client request). The in-sheet
     // title banner keeps the full-strength colour.
     sheet.properties.tabColor = { argb: tabColor };
-    sheet.mergeCells("A1:M1");
+    sheet.mergeCells("A1:W1");
     const title = sheet.getCell("A1");
     title.value = name;
     title.font = { bold: true, size: 16, color: { argb: reportTheme.headerText } };
