@@ -1125,13 +1125,20 @@ function appendExcelClassificationSheet(
   sheet.getCell("Q2").value = 12;
   sheet.getCell("Q3").value = 2;
   sheet.getCell("Q4").value = 3;
+  // Wrap the four divisor values in a thin box so they read as a deliberate little
+  // reference table rather than stray numbers (the client asked to keep them shown).
+  const qBoxSide = { color: { argb: reportTheme.titleText }, style: "thin" as const };
+  sheet.getCell("Q1").border = { top: qBoxSide, left: qBoxSide, right: qBoxSide };
+  sheet.getCell("Q2").border = { left: qBoxSide, right: qBoxSide };
+  sheet.getCell("Q3").border = { left: qBoxSide, right: qBoxSide };
+  sheet.getCell("Q4").border = { bottom: qBoxSide, left: qBoxSide, right: qBoxSide };
 
-  // Columns F, M, N, O, P and Q are hidden (not deleted — the monthly-average
+  // Columns F, M, N, O and P are hidden (not deleted — the monthly-average
   // formula and the result-sheet SUMIFs still read them). F (מחזוריות) is the
-  // recurrence selector, M is an empty spacer, N/O/P are the three
-  // "לשימוש פנימי" helper columns, and P/Q hold the recurrence→month-divisor
-  // lookup table the VLOOKUPs read. Hiding keeps the user-facing sheet clean while
-  // every formula keeps working; the user can unhide any of them in Excel.
+  // recurrence selector, M is an empty spacer, and N/O/P are the three
+  // "לשימוש פנימי" helper columns. Column Q holds the recurrence→month-divisor
+  // lookup values and stays visible in a bordered box (the client asked for it).
+  // Hiding keeps the user-facing sheet clean while every formula keeps working.
   sheet.columns = [
     { width: 22 }, // A מקור (also holds the KPI labels in rows 1-5, so wide enough for "ממוצע הוצאות בחודש" on one line)
     { width: 12 }, // B תאריך
@@ -1149,7 +1156,7 @@ function appendExcelClassificationSheet(
     { width: 20, hidden: true }, // N לממוצע חודשי (לשימוש פנימי)
     { width: 20, hidden: true }, // O מס' חודשים (לשימוש פנימי)
     { width: 20, hidden: true }, // P מס' מופעים (לשימוש פנימי)
-    { width: 20, hidden: true }, // Q divisor values for the recurrence lookup table
+    { width: 10 }, // Q recurrence-divisor values — kept visible in a bordered box
   ];
   sheet.autoFilter = `A8:P${lastRow}`;
   styleHeaderRow(sheet.getRow(8));
@@ -1775,10 +1782,15 @@ function sanitizeWorkbookForExcel(workbook: ExcelJS.Workbook) {
 }
 
 function styleHeaderRow(row: ExcelJS.Row) {
-  row.font = { bold: true, color: { argb: reportTheme.headerText } };
-  row.fill = { fgColor: { argb: reportTheme.headerFill }, pattern: "solid", type: "pattern" };
-  row.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  row.eachCell((cell) => {
+  // Style the header cells individually rather than setting row.fill/font, which
+  // Excel paints across the entire row (all 16k columns) — that teal banner then
+  // bleeds far past the data into the empty columns. includeEmpty visits every
+  // cell up to the last populated one (so in-between spacers still fill) but never
+  // beyond it, so the banner ends cleanly at the last data column.
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.font = { bold: true, color: { argb: reportTheme.headerText } };
+    cell.fill = { fgColor: { argb: reportTheme.headerFill }, pattern: "solid", type: "pattern" };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     cell.border = {
       bottom: { color: { argb: reportTheme.border }, style: "thin" },
       left: { color: { argb: reportTheme.border }, style: "thin" },
