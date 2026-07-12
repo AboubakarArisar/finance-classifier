@@ -319,3 +319,50 @@ export async function injectCategoryPieCharts(
   const out = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   return out;
 }
+
+// ExcelJS auto-sizes every comment box to span two columns starting at the
+// commented cell (see getDefaultRect in its vml-anchor xform). On the
+// classification sheet those two columns (C=34, D=14 wide) make the KPI note
+// boxes on B1:B5 balloon across the sheet — the client asked for compact boxes.
+// There is no public API for comment box size, so this reaches into the VML
+// drawing and rewrites the anchor of the five B-column notes to span a single
+// column plus one extra row of breathing space. Only integer column/row indices
+// are touched (unambiguous); the pixel offsets are left as ExcelJS wrote them.
+export async function shrinkKpiCommentBoxes(buffer: Buffer): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(buffer);
+  const vmlFiles = zip.file(/xl\/drawings\/vmlDrawing\d+\.vml$/);
+  if (vmlFiles.length === 0) {
+    return buffer;
+  }
+
+  let changed = false;
+  for (const file of vmlFiles) {
+    const vml = await file.async("string");
+    const next = vml.replace(/<v:shape\b[\s\S]*?<\/v:shape>/g, (shape) => {
+      // The KPI value cells are the only comments in column B (0-based index 1);
+      // G8/H8 helper notes live in columns 6/7 and are intentionally left alone.
+      if (!/<x:Column>1<\/x:Column>/.test(shape)) {
+        return shape;
+      }
+      return shape.replace(/<x:Anchor>([^<]*)<\/x:Anchor>/, (whole, rect: string) => {
+        // Anchor = LeftCol, LeftOff, TopRow, TopOff, RightCol, RightOff, BottomRow, BottomOff
+        const parts = rect.split(",").map((part) => part.trim());
+        if (parts.length !== 8) {
+          return whole;
+        }
+        parts[4] = "3"; // right column: span one column (C) instead of C+D
+        parts[6] = String(Number(parts[6]) + 1); // +1 row so long notes never clip
+        return `<x:Anchor>${parts.join(", ")}</x:Anchor>`;
+      });
+    });
+    if (next !== vml) {
+      zip.file(file.name, next);
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return buffer;
+  }
+  return (await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" })) as Buffer;
+}

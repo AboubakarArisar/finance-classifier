@@ -5,7 +5,7 @@ import os from "os";
 import path from "path";
 import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
-import { injectCategoryPieCharts, type CategoryPieChart } from "./excel-charts";
+import { injectCategoryPieCharts, shrinkKpiCommentBoxes, type CategoryPieChart } from "./excel-charts";
 
 export type UploadKind = "credit" | "bank";
 
@@ -123,6 +123,7 @@ const reportTheme = {
   kpiFill: "FFFBEAE3", // pale coral wash behind the KPI / total numbers
   kpiText: "FFB5532A", // burnt-coral lettering for KPI / total numbers
   noteText: "FF6B7B83", // muted slate for the helper note line
+  alertText: "FFC00000", // dark red — row 6 "שימו לב" (editable-columns) line
   border: "FFB7C5CC", // soft slate cell borders
   // Expense / income / balance accent scheme, matching the client's reference:
   // expenses read warm-orange/red, income reads blue, the balance reads yellow.
@@ -935,7 +936,9 @@ async function buildReportWorkbook(transactions: NormalizedTransaction[], summar
     { sheetName: incomeGraphSheetName, charts: getIncomeGraphCharts() },
     { sheetName: expenseGraphSheetName, charts: getExpenseGraphCharts() },
   ]);
-  return withCharts;
+  // ExcelJS can't size comment boxes; shrink the KPI note boxes (B1:B5) so they
+  // read as compact tooltips instead of ballooning across the wide C/D columns.
+  return shrinkKpiCommentBoxes(withCharts);
 }
 
 function getRecurrenceMonthDivisor(recurrence: string, monthCount: number) {
@@ -1072,8 +1075,8 @@ function appendExcelClassificationSheet(
     ["ממוצע הוצאות בחודש", { formula: "'תוצאות השיקוף'!B1", result: totalExpense }],
     ["ממוצע הכנסות בחודש", { formula: "'תוצאות השיקוף'!E1", result: totalIncome }],
     ["מאזן חודשי", { formula: "B4-B3", result: totalIncome - totalExpense }],
-    ["שימו לב! ניתן לבחור ולתקן סעיף ראשי, שם סעיף והוצאה/הכנסה בעזרת הרשימות הנפתחות."],
-    ["תנועות מתוך דפי בנק וכרטיסי אשראי"],
+    ["שימו לב! הינכם יכולים לשנות ולתקן את העמודות הבאות: סכום, הוצאה / הכנסה, קטגוריה, תת קטגוריה והערות."],
+    ["התנועות שמוצגות בדו\"ח הינם מתוך דפי עו\"ש של חשבון הבנק ופירוט כרטיסי אשראי בקובץ אקסל מהאתרים הרשמיים בלבד."],
     classificationHeaders,
     ...transactions.map((transaction, index) => {
       const rowNumber = index + 9;
@@ -1123,10 +1126,11 @@ function appendExcelClassificationSheet(
   sheet.getCell("Q3").value = 2;
   sheet.getCell("Q4").value = 3;
 
-  // Columns F, M, N, O and P are hidden (not deleted — the monthly-average
+  // Columns F, M, N, O, P and Q are hidden (not deleted — the monthly-average
   // formula and the result-sheet SUMIFs still read them). F (מחזוריות) is the
-  // recurrence selector, M is an empty spacer, and N/O/P are the three
-  // "לשימוש פנימי" helper columns. Hiding keeps the user-facing sheet clean while
+  // recurrence selector, M is an empty spacer, N/O/P are the three
+  // "לשימוש פנימי" helper columns, and P/Q hold the recurrence→month-divisor
+  // lookup table the VLOOKUPs read. Hiding keeps the user-facing sheet clean while
   // every formula keeps working; the user can unhide any of them in Excel.
   sheet.columns = [
     { width: 22 }, // A מקור (also holds the KPI labels in rows 1-5, so wide enough for "ממוצע הוצאות בחודש" on one line)
@@ -1145,6 +1149,7 @@ function appendExcelClassificationSheet(
     { width: 20, hidden: true }, // N לממוצע חודשי (לשימוש פנימי)
     { width: 20, hidden: true }, // O מס' חודשים (לשימוש פנימי)
     { width: 20, hidden: true }, // P מס' מופעים (לשימוש פנימי)
+    { width: 20, hidden: true }, // Q divisor values for the recurrence lookup table
   ];
   sheet.autoFilter = `A8:P${lastRow}`;
   styleHeaderRow(sheet.getRow(8));
@@ -1195,9 +1200,33 @@ function appendExcelClassificationSheet(
   ["B1", "B2"].forEach((cellAddress) => {
     sheet.getCell(cellAddress).font = { bold: true, size: 12, color: { argb: reportTheme.titleText } };
   });
-  // Row 6 is the "you can edit the dropdowns" note; row 7 is the table banner.
-  sheet.getCell("A6").font = { italic: true, color: { argb: reportTheme.noteText } };
-  sheet.getCell("A7").font = { bold: true, size: 12, color: { argb: reportTheme.titleText } };
+  // Rows 6 and 7 are the two red "שימו לב" instruction lines the client asked for:
+  // row 6 lists the editable columns, row 7 explains the data source. Both red.
+  sheet.getCell("A6").font = { size: 11, color: { argb: reportTheme.alertText } };
+  // Row 7 (data-source line) uses the teal title colour, matching the KPI labels.
+  sheet.getCell("A7").font = { size: 11, color: { argb: reportTheme.titleText } };
+  // Teal box border around the five KPI value cells (B1:B5) so the family's summary
+  // reads as a bordered card, matching the client's reference (design change).
+  const kpiBorderSide = { color: { argb: reportTheme.titleText }, style: "medium" as const };
+  ["B1", "B2", "B3", "B4", "B5"].forEach((cellAddress) => {
+    sheet.getCell(cellAddress).border = {
+      bottom: kpiBorderSide,
+      left: kpiBorderSide,
+      right: kpiBorderSide,
+      top: kpiBorderSide,
+    };
+  });
+  // "תזרים פלוס" helper comment on each KPI value cell — clicking the cell explains
+  // what to enter (name / months) or what the number means (avg expense/income/balance).
+  ([
+    ["B1", "יש לרשום את שם המשפחה בלבד"],
+    ["B2", "יש לרשום את מספר חודשי השיקוף המלאים שהעלאתם למערכת"],
+    ["B3", "כאן תוכלו לראות את ממוצע ההוצאות החודשיות של משק הבית / העסק שלכם"],
+    ["B4", "כאן תוכלו לראות את ממוצע ההכנסות החודשיות של משק הבית / העסק שלכם"],
+    ["B5", "כאן תוכלו לראות את ממוצע המאזן החודשי של משק הבית / העסק שלכם"],
+  ] as const).forEach(([cellAddress, body]) => {
+    sheet.getCell(cellAddress).note = classificationHelperNote("תזרים פלוס", body);
+  });
   // The two long KPI labels ("ממוצע הוצאות בחודש" / "ממוצע הכנסות בחודש") sit next
   // to a value chip, so they can't overflow. Column A is widened above so they fit
   // on a single line; keep them unwrapped on default-height rows. Presentation only.
