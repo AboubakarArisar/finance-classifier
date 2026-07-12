@@ -1546,7 +1546,7 @@ async function appendBudgetTemplateSheets(workbook: ExcelJS.Workbook) {
 // client's own formula, image reference); (3) both category tables get a clean
 // thin-black border grid on their populated cells.
 function applyBalanceBudgetTweaks(sheet: ExcelJS.Worksheet) {
-  const darkRed = "FFC00000";
+  const red = "FFFF0000"; // bright red, matching the client's reference file
   const thin = { style: "thin" as const, color: { argb: "FF000000" } };
 
   // (1) Row 2 — the merged instructions line (A2:M2). Recolour the rich-text
@@ -1557,7 +1557,7 @@ function applyBalanceBudgetTweaks(sheet: ExcelJS.Worksheet) {
     introCell.value = {
       richText: introValue.richText.map((run) => ({
         ...run,
-        font: { ...(run.font ?? {}), bold: true, color: { argb: darkRed } },
+        font: { ...(run.font ?? {}), bold: true, color: { argb: red } },
       })),
     };
   }
@@ -1682,16 +1682,6 @@ function appendExcelResultSheet(
   for (let rowNumber = firstDataRow; rowNumber <= lastDataRow; rowNumber += 1) {
     sheet.getCell(`B${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
     sheet.getCell(`E${rowNumber}`).numFmt = '[$₪-40D]#,##0.00;[Red]-[$₪-40D]#,##0.00;[$₪-40D]-';
-    // Zebra-band the expense (A/B) and income (D/E) columns on alternating rows.
-    if (rowNumber % 2 === 0) {
-      [1, 2, 4, 5].forEach((col) => {
-        sheet.getCell(rowNumber, col).fill = {
-          fgColor: { argb: reportTheme.bandFill },
-          pattern: "solid",
-          type: "pattern",
-        };
-      });
-    }
   }
 
   // Main-category totals in columns G/H — the data behind the two summary pies
@@ -1742,73 +1732,93 @@ function appendExcelResultSheet(
     });
   });
 
-  // Bordered category tables (client design, reference image): each two-column
-  // table gets ONE continuous frame that starts at the header (row 1) and runs
-  // straight down to the table's last row — the spacer (row 2) and the
-  // sub-header (row 3) sit *inside* the frame, not outside it. The header and
-  // sub-header rows are closed with horizontal rules; the frame closes on the
-  // last row. Solid black: a MEDIUM outer frame around each table with THIN
-  // inner dividers (the header/sub-header rules, the column split, the spacer
-  // lines) — bolder perimeter, lighter interior, per the client's request.
+  // Bordered category tables — reproduce the client's reference (desiredfile):
+  // a MEDIUM black outer frame around each two-column table, a THIN slate divider
+  // between the header/sub-header cells, faint HAIR rules between the data rows,
+  // and pale zebra banding on the populated even rows. The inner column split
+  // shows only on the header rows; the data area is separated by the hair rules.
   const mSide = { color: { argb: "FF000000" }, style: "medium" as const }; // outer frame
-  const tSide = { color: { argb: "FF000000" }, style: "thin" as const }; // inner dividers
+  const slate = { color: { argb: reportTheme.border }, style: "thin" as const }; // header inner divider / rules
+  const thinBlack = { color: { argb: "FF000000" }, style: "thin" as const }; // spacer fence
+  const hair = { color: { argb: "FF000000" }, style: "hair" as const }; // faint data-row separators
   const cellHasValue = (column: number, rowNumber: number) => {
     const value = sheet.getCell(rowNumber, column).value;
     return value !== null && value !== undefined && value !== "";
   };
-  const frameTable = (columns: readonly [number, number], lastRow: number) => {
-    const [leftCol, rightCol] = columns;
-    for (let rowNumber = 1; rowNumber <= lastRow; rowNumber += 1) {
-      // Vertical: outer edges (left of the left column, right of the right
-      // column) are medium; the split between the two columns is a thin divider.
-      const leftBorder: Partial<ExcelJS.Borders> = { left: mSide, right: tSide };
-      const rightBorder: Partial<ExcelJS.Borders> = { left: tSide, right: mSide };
-      const setHorizontal = (side: "top" | "bottom", weight: ExcelJS.Border) => {
-        leftBorder[side] = weight;
-        rightBorder[side] = weight;
-      };
-      // Outer top edge (medium) + thin rule under the header.
-      if (rowNumber === 1) {
-        setHorizontal("top", mSide);
-        setHorizontal("bottom", tSide);
-      }
-      // Sub-header (row 3) fenced with thin rules — only where one exists (A/B
-      // and D/E carry a sub-header; so now does the G/H summary).
-      if (rowNumber === 3 && cellHasValue(leftCol, 3)) {
-        setHorizontal("top", tSide);
-        setHorizontal("bottom", tSide);
-      }
-      // Outer bottom edge (medium) closes the frame.
-      if (rowNumber === lastRow) {
-        setHorizontal("bottom", mSide);
-      }
-      sheet.getCell(rowNumber, leftCol).border = leftBorder;
-      sheet.getCell(rowNumber, rightCol).border = rightBorder;
-    }
-  };
+
   const expenseLastRow = firstDataRow + expenseSubCategories.length - 1;
   const incomeLastRow = firstDataRow + incomeSubCategories.length - 1;
-  // The G/H summary carries a blank spacer between the expense and income
-  // blocks; close the frame on its last populated row (the last income main
-  // category) so the frame reaches the שכר / קצבאות / הכנסות שונות block.
+  // The G/H summary closes on its last populated row (the last income main
+  // category), so the frame reaches the שכר / קצבאות / הכנסות שונות block.
   let summaryLastRow = firstDataRow;
   for (let rowNumber = firstDataRow; rowNumber <= summaryEnd; rowNumber += 1) {
     if (cellHasValue(7, rowNumber)) {
       summaryLastRow = rowNumber;
     }
   }
+
+  // Zebra-band the populated even rows of each table — each column range only as
+  // far as its own data extends, and skipping empty rows (e.g. the G/H spacer),
+  // so the income column doesn't band past its last category the way it used to.
+  const bandTable = (columns: readonly number[], lastRow: number) => {
+    for (let rowNumber = firstDataRow; rowNumber <= lastRow; rowNumber += 1) {
+      if (rowNumber % 2 !== 0) {
+        continue;
+      }
+      if (!columns.some((column) => cellHasValue(column, rowNumber))) {
+        continue;
+      }
+      for (const column of columns) {
+        sheet.getCell(rowNumber, column).fill = { fgColor: { argb: reportTheme.bandFill }, pattern: "solid", type: "pattern" };
+      }
+    }
+  };
+  bandTable([1, 2], expenseLastRow); // A/B — expenses
+  bandTable([4, 5], incomeLastRow); // D/E — income
+  bandTable([7, 8], summaryLastRow); // G/H — summary
+
+  const frameTable = (columns: readonly [number, number], lastRow: number) => {
+    const [leftCol, rightCol] = columns;
+    const hasSubHeader = cellHasValue(leftCol, 3);
+    for (let rowNumber = 1; rowNumber <= lastRow; rowNumber += 1) {
+      const leftBorder: Partial<ExcelJS.Borders> = { left: mSide };
+      const rightBorder: Partial<ExcelJS.Borders> = { right: mSide };
+      // The thin slate column split is drawn only on the header (1) and
+      // sub-header (3) rows; the data area is divided by the hair rules alone.
+      if (rowNumber === 1 || (rowNumber === 3 && hasSubHeader)) {
+        leftBorder.right = slate;
+        rightBorder.left = slate;
+      }
+      const setHorizontal = (side: "top" | "bottom", weight: ExcelJS.Border) => {
+        leftBorder[side] = weight;
+        rightBorder[side] = weight;
+      };
+      if (rowNumber === 1) {
+        setHorizontal("top", mSide);
+        setHorizontal("bottom", mSide); // medium underline beneath the header
+      } else if (rowNumber === 3 && hasSubHeader) {
+        setHorizontal("top", slate);
+        setHorizontal("bottom", slate);
+      } else if (rowNumber >= firstDataRow) {
+        if (rowNumber > firstDataRow) {
+          setHorizontal("top", hair);
+        }
+        setHorizontal("bottom", rowNumber === lastRow ? mSide : hair);
+      }
+      sheet.getCell(rowNumber, leftCol).border = leftBorder;
+      sheet.getCell(rowNumber, rightCol).border = rightBorder;
+    }
+  };
   frameTable([1, 2], expenseLastRow); // A/B — expense categories
   frameTable([4, 5], incomeLastRow); // D/E — income categories
   frameTable([7, 8], summaryLastRow); // G/H — הפרש summary
 
-  // The blank spacer (row 20) between the expense-summary and income-summary
-  // blocks gets thin horizontal dividers on top and bottom — the lines that
-  // fence it off from פיננסים above and the שכר / קצבאות block below — while its
-  // sides stay part of the medium outer frame.
+  // The blank spacer between the expense-summary and income-summary blocks in the
+  // G/H table gets thin fences top and bottom, its sides on the outer frame.
   const summarySpacerRow = incomeSummaryStart - 1;
   if (summarySpacerRow > firstDataRow && summarySpacerRow < summaryLastRow) {
-    sheet.getCell(summarySpacerRow, 7).border = { top: tSide, bottom: tSide, left: mSide, right: tSide };
-    sheet.getCell(summarySpacerRow, 8).border = { top: tSide, bottom: tSide, left: tSide, right: mSide };
+    sheet.getCell(summarySpacerRow, 7).border = { top: thinBlack, bottom: thinBlack, left: mSide };
+    sheet.getCell(summarySpacerRow, 8).border = { top: thinBlack, bottom: thinBlack, right: mSide };
   }
 }
 
