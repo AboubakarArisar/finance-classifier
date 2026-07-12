@@ -129,6 +129,8 @@ const reportTheme = {
   // expenses read warm-orange/red, income reads blue, the balance reads yellow.
   expenseFill: "FFE8730C", // orange — expense section headers
   incomeFill: "FF2E5FA3", // blue — income section headers
+  incomeTabFill: "FFB4C7E7", // light blue — income graph sheet tab
+  expenseTabFill: "FFF8CBAD", // light orange — expense graph sheet tab
   expenseChipFill: "FFFDEAEA", // pale red behind expense value chips
   expenseChipText: "FFC0392B", // red lettering for expense values
   incomeChipFill: "FFE7EFF9", // pale blue behind income value chips
@@ -1476,10 +1478,15 @@ function getExpenseGraphCharts(): CategoryPieChart[] {
 // data or formula lives here. Grid lines are hidden so the sheet reads as a
 // clean canvas of graphs, matching the client's request.
 function appendExcelGraphSheets(workbook: ExcelJS.Workbook) {
-  const buildGraphSheet = (name: string, titleFill: string) => {
+  const buildGraphSheet = (name: string, titleFill: string, tabColor: string) => {
     const sheet = workbook.addWorksheet(name, {
       views: [{ rightToLeft: true, showGridLines: false }],
     });
+    // Tint the sheet tab a light version of the graph's theme so the income
+    // (light blue) and expense (light orange) views are distinguishable at a
+    // glance without the tab reading too dark (client request). The in-sheet
+    // title banner keeps the full-strength colour.
+    sheet.properties.tabColor = { argb: tabColor };
     sheet.mergeCells("A1:M1");
     const title = sheet.getCell("A1");
     title.value = name;
@@ -1489,8 +1496,8 @@ function appendExcelGraphSheets(workbook: ExcelJS.Workbook) {
     sheet.getRow(1).height = 30;
   };
   // Income first, then expenses — the order the client asked for.
-  buildGraphSheet(incomeGraphSheetName, reportTheme.incomeFill);
-  buildGraphSheet(expenseGraphSheetName, reportTheme.expenseFill);
+  buildGraphSheet(incomeGraphSheetName, reportTheme.incomeFill, reportTheme.incomeTabFill);
+  buildGraphSheet(expenseGraphSheetName, reportTheme.expenseFill, reportTheme.expenseTabFill);
 }
 
 // The three budget worksheets (תקציב איזון / בקרה / הון) are prepared by hand by
@@ -1642,7 +1649,49 @@ function appendExcelResultSheet(
     return aggRow;
   };
   const incomeSummaryStart = writeMainCategoryTotals(getCategoryGroups(0, 16), "B", firstDataRow, expenseCategoryTextArgb) + 1;
-  writeMainCategoryTotals(getCategoryGroups(16, 19), "E", incomeSummaryStart, incomeCategoryTextArgb);
+  const summaryEnd = writeMainCategoryTotals(getCategoryGroups(16, 19), "E", incomeSummaryStart, incomeCategoryTextArgb);
+
+  // Bordered category tables (client design): the header (row 1) and sub-header
+  // (row 3) cells are already boxed by styleHeaderRow. The data rows get only
+  // *vertical* borders (left/right) so each table reads as a framed two-column
+  // list separated by the zebra banding — not the full row-by-row grid the
+  // client rejected. The last row of each column also takes a bottom border to
+  // close the frame.
+  // Dark teal so the frame is clearly visible (the soft-slate border reads as
+  // invisible against the fills — the client asked for a visible border).
+  const vSide = { color: { argb: reportTheme.titleText }, style: "thin" as const };
+  const verticalBorder = (isLast: boolean) =>
+    isLast ? { bottom: vSide, left: vSide, right: vSide } : { left: vSide, right: vSide };
+  // Box the header (row 1) and sub-header (row 3) cells in the same dark colour so
+  // the whole table frame matches (styleHeaderRow drew them in the faint slate).
+  const boxBorder = { bottom: vSide, left: vSide, right: vSide, top: vSide };
+  (["A1", "B1", "D1", "E1", "G1", "H1", "A3", "B3", "D3", "E3"] as const).forEach((address) => {
+    sheet.getCell(address).border = boxBorder;
+  });
+  const expenseLastRow = firstDataRow + expenseSubCategories.length - 1;
+  const incomeLastRow = firstDataRow + incomeSubCategories.length - 1;
+  for (let rowNumber = firstDataRow; rowNumber <= expenseLastRow; rowNumber += 1) {
+    sheet.getCell(`A${rowNumber}`).border = verticalBorder(rowNumber === expenseLastRow);
+    sheet.getCell(`B${rowNumber}`).border = verticalBorder(rowNumber === expenseLastRow);
+  }
+  for (let rowNumber = firstDataRow; rowNumber <= incomeLastRow; rowNumber += 1) {
+    sheet.getCell(`D${rowNumber}`).border = verticalBorder(rowNumber === incomeLastRow);
+    sheet.getCell(`E${rowNumber}`).border = verticalBorder(rowNumber === incomeLastRow);
+  }
+  // The G/H summary can carry a blank spacer row between the expense and income
+  // blocks; border the whole span (spacer included) so the vertical frame stays
+  // continuous, then close it on the last populated row.
+  let summaryLastRow = firstDataRow;
+  for (let rowNumber = firstDataRow; rowNumber <= summaryEnd; rowNumber += 1) {
+    const label = sheet.getCell(`G${rowNumber}`).value;
+    if (label !== null && label !== undefined && label !== "") {
+      summaryLastRow = rowNumber;
+    }
+  }
+  for (let rowNumber = firstDataRow; rowNumber <= summaryLastRow; rowNumber += 1) {
+    sheet.getCell(`G${rowNumber}`).border = verticalBorder(rowNumber === summaryLastRow);
+    sheet.getCell(`H${rowNumber}`).border = verticalBorder(rowNumber === summaryLastRow);
+  }
 }
 
 function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
