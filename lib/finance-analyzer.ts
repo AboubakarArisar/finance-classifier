@@ -1668,33 +1668,43 @@ function appendExcelResultSheet(
   // straight down to the table's last row — the spacer (row 2) and the
   // sub-header (row 3) sit *inside* the frame, not outside it. The header and
   // sub-header rows are closed with horizontal rules; the frame closes on the
-  // last row. Solid black, thin line — a light frame like the client's
-  // reference, not the heavy medium slab that read as night-and-day too bold.
-  const vSide = { color: { argb: "FF000000" }, style: "thin" as const };
+  // last row. Solid black: a MEDIUM outer frame around each table with THIN
+  // inner dividers (the header/sub-header rules, the column split, the spacer
+  // lines) — bolder perimeter, lighter interior, per the client's request.
+  const mSide = { color: { argb: "FF000000" }, style: "medium" as const }; // outer frame
+  const tSide = { color: { argb: "FF000000" }, style: "thin" as const }; // inner dividers
   const cellHasValue = (column: number, rowNumber: number) => {
     const value = sheet.getCell(rowNumber, column).value;
     return value !== null && value !== undefined && value !== "";
   };
-  const frameTable = (columns: readonly number[], lastRow: number) => {
+  const frameTable = (columns: readonly [number, number], lastRow: number) => {
+    const [leftCol, rightCol] = columns;
     for (let rowNumber = 1; rowNumber <= lastRow; rowNumber += 1) {
-      const border: Partial<ExcelJS.Borders> = { left: vSide, right: vSide };
-      // Close the header (row 1) top and bottom. Close the sub-header (row 3)
-      // only where one actually exists — the A/B and D/E tables carry a
-      // sub-header, the G/H summary does not.
+      // Vertical: outer edges (left of the left column, right of the right
+      // column) are medium; the split between the two columns is a thin divider.
+      const leftBorder: Partial<ExcelJS.Borders> = { left: mSide, right: tSide };
+      const rightBorder: Partial<ExcelJS.Borders> = { left: tSide, right: mSide };
+      const setHorizontal = (side: "top" | "bottom", weight: ExcelJS.Border) => {
+        leftBorder[side] = weight;
+        rightBorder[side] = weight;
+      };
+      // Outer top edge (medium) + thin rule under the header.
       if (rowNumber === 1) {
-        border.top = vSide;
-        border.bottom = vSide;
+        setHorizontal("top", mSide);
+        setHorizontal("bottom", tSide);
       }
-      if (rowNumber === 3 && cellHasValue(columns[0], 3)) {
-        border.top = vSide;
-        border.bottom = vSide;
+      // Sub-header (row 3) fenced with thin rules — only where one exists (A/B
+      // and D/E carry a sub-header; so now does the G/H summary).
+      if (rowNumber === 3 && cellHasValue(leftCol, 3)) {
+        setHorizontal("top", tSide);
+        setHorizontal("bottom", tSide);
       }
+      // Outer bottom edge (medium) closes the frame.
       if (rowNumber === lastRow) {
-        border.bottom = vSide;
+        setHorizontal("bottom", mSide);
       }
-      for (const column of columns) {
-        sheet.getCell(rowNumber, column).border = border;
-      }
+      sheet.getCell(rowNumber, leftCol).border = leftBorder;
+      sheet.getCell(rowNumber, rightCol).border = rightBorder;
     }
   };
   const expenseLastRow = firstDataRow + expenseSubCategories.length - 1;
@@ -1713,14 +1723,13 @@ function appendExcelResultSheet(
   frameTable([7, 8], summaryLastRow); // G/H — הפרש summary
 
   // The blank spacer (row 20) between the expense-summary and income-summary
-  // blocks gets horizontal dividers on both top and bottom — the lines that
-  // fence it off from פיננסים above and the שכר / קצבאות block below, per the
-  // reference. Keep its side borders.
+  // blocks gets thin horizontal dividers on top and bottom — the lines that
+  // fence it off from פיננסים above and the שכר / קצבאות block below — while its
+  // sides stay part of the medium outer frame.
   const summarySpacerRow = incomeSummaryStart - 1;
   if (summarySpacerRow > firstDataRow && summarySpacerRow < summaryLastRow) {
-    [7, 8].forEach((column) => {
-      sheet.getCell(summarySpacerRow, column).border = { top: vSide, bottom: vSide, left: vSide, right: vSide };
-    });
+    sheet.getCell(summarySpacerRow, 7).border = { top: tSide, bottom: tSide, left: mSide, right: tSide };
+    sheet.getCell(summarySpacerRow, 8).border = { top: tSide, bottom: tSide, left: tSide, right: mSide };
   }
 }
 
