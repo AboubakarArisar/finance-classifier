@@ -1546,83 +1546,42 @@ async function appendBudgetTemplateSheets(workbook: ExcelJS.Workbook) {
       }
     });
 
-    // Client-requested tweaks to the balance-budget sheet (the first template
-    // sheet). The template file itself stays untouched — the client maintains
-    // it by hand — so the edits are applied to the in-memory copy only.
+    // The balance-budget sheet (first template sheet) auto-fills its שיקוף columns
+    // from the reflection so the family sees their real monthly figures without
+    // retyping them — matching the client's reference file.
     if (name === budgetTemplateSheetNames[0]) {
-      applyBalanceBudgetTweaks(destination);
+      wireBalanceBudgetReflection(destination);
     }
   }
 }
 
-// Apply the client's design changes to the "תקציב איזון" balance-budget sheet
-// after it is copied from the template: (1) the row-2 instructions line reads
-// dark red with a top border; (2) the income table's יתרה column is recomputed
-// as איזון − שיקוף (=Kr−Jr) instead of the template's שיקוף − איזון (per the
-// client's own formula, image reference); (3) both category tables get a clean
-// thin-black border grid on their populated cells.
-function applyBalanceBudgetTweaks(sheet: ExcelJS.Worksheet) {
-  const red = "FFFF0000"; // bright red, matching the client's reference file
-  const thin = { style: "thin" as const, color: { argb: "FF000000" } };
-
-  // (1) Row 2 — the merged instructions line (A2:M2). Recolour the rich-text
-  // runs dark red (keeping their bold/face) and draw a top border across the row.
-  const introCell = sheet.getCell("A2");
-  const introValue = introCell.value;
-  if (introValue && typeof introValue === "object" && "richText" in introValue) {
-    introCell.value = {
-      richText: introValue.richText.map((run) => ({
-        ...run,
-        font: { ...(run.font ?? {}), bold: true, color: { argb: red } },
-      })),
-    };
-  }
-  for (let column = 1; column <= 13; column += 1) {
-    const cell = sheet.getCell(2, column);
-    cell.border = { ...(cell.border ?? {}), top: thin };
-  }
-
-  // (2) Flip the income table's יתרה (column L) to איזון − שיקוף. Only the
-  // per-row data cells (explicit or shared subtraction formulas) are rewritten;
-  // the SUM subtotals and the top summary rows (< 7) are left untouched. The
-  // expense table (column E) keeps its שיקוף − איזון, as the client scoped this
-  // change to the income column (K).
-  for (let rowNumber = 7; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    const cell = sheet.getCell(`L${rowNumber}`);
-    const value = cell.value;
-    if (value && typeof value === "object") {
-      const formula = "formula" in value && typeof value.formula === "string" ? value.formula : undefined;
-      const isSum = formula !== undefined && /^SUM\(/i.test(formula);
-      const isDataFormula = (formula !== undefined && !isSum) || "sharedFormula" in value;
-      if (isDataFormula) {
-        cell.value = { formula: `K${rowNumber}-J${rowNumber}`, result: 0 };
-      }
+// Wire the "תקציב איזון" שיקוף (reflection) columns to the result sheet so each
+// budget line shows the family's actual monthly average. Two mirrored tables:
+// the expense table reads its subcategory label from column B and writes column C,
+// pulling from תוצאות השיקוף's expense side (labels col A → averages col B); the
+// income table reads column I and writes column J from the income side (labels col
+// D → averages col E). Only data rows are touched — identified by a text label
+// beside a plain-number (zeroed template) שיקוף cell — so header, subtotal (SUM)
+// and summary rows keep the formulas the client built. IFERROR keeps unmatched
+// lines (e.g. blank "כללי" rows) at 0, exactly as in the reference.
+function wireBalanceBudgetReflection(sheet: ExcelJS.Worksheet) {
+  const ref = `'${resultSheetName}'`;
+  const isLabel = (value: ExcelJS.CellValue): value is string =>
+    typeof value === "string" && value.trim() !== "";
+  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    if (isLabel(sheet.getCell(`B${rowNumber}`).value) && typeof sheet.getCell(`C${rowNumber}`).value === "number") {
+      sheet.getCell(`C${rowNumber}`).value = {
+        formula: `IFERROR(INDEX(${ref}!$B:$B,MATCH(B${rowNumber},${ref}!$A:$A,0)),0)`,
+        result: 0,
+      };
+    }
+    if (isLabel(sheet.getCell(`I${rowNumber}`).value) && typeof sheet.getCell(`J${rowNumber}`).value === "number") {
+      sheet.getCell(`J${rowNumber}`).value = {
+        formula: `IFERROR(INDEX(${ref}!$E:$E,MATCH(I${rowNumber},${ref}!$D:$D,0)),0)`,
+        result: 0,
+      };
     }
   }
-
-  // (3) Proper borders on both tables — a thin black grid over every populated
-  // cell from the header (row 6) down. Fully-empty rows (the gaps between
-  // category blocks) are skipped so the blocks stay visually separated.
-  const borderTable = (firstCol: number, lastCol: number, firstRow: number, lastRow: number) => {
-    for (let rowNumber = firstRow; rowNumber <= lastRow; rowNumber += 1) {
-      let hasContent = false;
-      for (let column = firstCol; column <= lastCol; column += 1) {
-        const value = sheet.getCell(rowNumber, column).value;
-        if (value !== null && value !== undefined && value !== "") {
-          hasContent = true;
-          break;
-        }
-      }
-      if (!hasContent) {
-        continue;
-      }
-      for (let column = firstCol; column <= lastCol; column += 1) {
-        sheet.getCell(rowNumber, column).border = { top: thin, bottom: thin, left: thin, right: thin };
-      }
-    }
-  };
-  borderTable(1, 6, 6, 138); // expense table (A–F)
-  borderTable(8, 13, 6, 27); // income table (H–M)
 }
 
 function appendExcelResultSheet(
@@ -1895,11 +1854,29 @@ function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
       sheet.getCell(rowNumber, colNumber).border = border;
     }
   }
+  // Header row (1) joins the same frame: medium top/bottom, thin separators
+  // between the labels, and medium rules on the three section dividers — so the
+  // orange header caps sit flush on the ledger below.
+  const thin = { color: { argb: reportTheme.border }, style: "thin" as const };
+  for (let colNumber = 1; colNumber <= totalCols; colNumber += 1) {
+    const border: Partial<ExcelJS.Borders> = { top: mSide, bottom: mSide };
+    if (colNumber === 1 || colNumber === incomeStartCol) {
+      border.left = mSide;
+    } else if (colNumber !== unclassifiedCol) {
+      border.left = thin;
+    }
+    if (colNumber === incomeEndCol || colNumber === unclassifiedCol) {
+      border.right = mSide;
+    } else if (colNumber !== incomeStartCol - 1) {
+      border.right = thin;
+    }
+    sheet.getCell(1, colNumber).border = border;
+  }
 }
 
 function appendExcelImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
   const sheet = workbook.addWorksheet("ליבוא מהתוכנה", {
-    views: [{ rightToLeft: true }],
+    views: [{ rightToLeft: true, showGridLines: false }],
   });
   sheet.addRows([
     ["[אין למחוק או לערוך גיליון זה]", "", "", "", "", "", "", "", "מוכן ליבוא"],
@@ -1915,7 +1892,13 @@ function appendExcelImportSheet(workbook: ExcelJS.Workbook, transactions: Normal
     ]),
   ]);
   sheet.columns = [{ width: 12 }, { width: 36 }, { width: 14 }, { width: 14 }, { width: 24 }, { width: 28 }, { width: 40 }];
-  styleHeaderRow(sheet.getRow(2));
+  const importHeaderRow = sheet.getRow(2);
+  styleHeaderRow(importHeaderRow);
+  // Extend the teal header banner across the whole row, past the last populated
+  // column (G), so the empty area reads as one continuous bar — matching the
+  // client's reference. A row-level fill makes Excel paint every column to the
+  // sheet edge (the very "bleed" styleHeaderRow avoids elsewhere is wanted here).
+  importHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: reportTheme.headerFill } };
 }
 
 function appendExcelChoicesSheet(workbook: ExcelJS.Workbook) {
