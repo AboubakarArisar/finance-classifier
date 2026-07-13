@@ -82,14 +82,14 @@ const classificationHeaders = [
   "תאריך",
   "תיאור / שם בית העסק",
   "סכום",
-  "הוצאה/הכנסה\n(ברירת מחדל: הוצאה)",
+  "הוצאה / הכנסה\n(ברירת מחדל: הוצאה)",
   "מחזוריות\n(ברירת מחדל: חודשי/מזדמן)",
-  "סעיף ראשי",
-  "שם סעיף",
+  "קטגוריה",
+  "תת קטגוריה",
   "הערות (מלל חופשי)",
   "סכום עסקה",
   "מטבע לחיוב",
-  "מספר כרטיס/בנק",
+  "מספר כרטיס / בנק",
   "",
   "לממוצע חודשי (לשימוש פנימי)",
   "מס' חודשים (לשימוש פנימי)",
@@ -1031,7 +1031,7 @@ function countDuplicateTransaction(transactions: NormalizedTransaction[], target
 
 function appendExcelSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSheetSummary[]) {
   const sheet = workbook.addWorksheet("סיכום קבצים", {
-    views: [{ rightToLeft: true }],
+    views: [{ rightToLeft: true, showGridLines: false }],
   });
   sheet.addRows([
     ["נוצר באמצעות Finance Classifier", new Date().toLocaleDateString("he-IL")],
@@ -1064,7 +1064,7 @@ function appendExcelClassificationSheet(
   monthCount: number,
 ) {
   const sheet = workbook.addWorksheet("סיווג תנועות", {
-    views: [{ activeCell: "G9", rightToLeft: true, state: "frozen", ySplit: 8 }],
+    views: [{ activeCell: "G9", rightToLeft: true, state: "frozen", ySplit: 8, showGridLines: false }],
   });
   const lastRow = transactions.length + 8;
   const averages = computeSubCategoryAverages(transactions, monthCount);
@@ -1078,7 +1078,7 @@ function appendExcelClassificationSheet(
     ["ממוצע הכנסות בחודש", { formula: "'תוצאות השיקוף'!E1", result: totalIncome }],
     ["מאזן חודשי", { formula: "B4-B3", result: totalIncome - totalExpense }],
     ["שימו לב! הינכם יכולים לשנות ולתקן את העמודות הבאות: סכום, הוצאה / הכנסה, קטגוריה, תת קטגוריה והערות."],
-    ["התנועות שמוצגות בדו\"ח הינם מתוך דפי עו\"ש של חשבון הבנק ופירוט כרטיסי אשראי בקובץ אקסל מהאתרים הרשמיים בלבד."],
+    ["התנועות שמוצגות בדו\"ח הינם מתוך דפי עו\"ש של חשבון הבנק ופירוט כרטיסי אשראי בקובץ אקסל מהאתרים הרישמיים בלבד."],
     classificationHeaders,
     ...transactions.map((transaction, index) => {
       const rowNumber = index + 9;
@@ -1146,14 +1146,14 @@ function appendExcelClassificationSheet(
     { width: 12 }, // B תאריך
     { width: 34 }, // C תיאור / שם בית העסק
     { width: 14 }, // D סכום
-    { width: 16 }, // E הוצאה/הכנסה
+    { width: 16 }, // E הוצאה / הכנסה
     { width: 18, hidden: true }, // F מחזוריות
-    { width: 24 }, // G סעיף ראשי
-    { width: 28 }, // H שם סעיף
+    { width: 24 }, // G קטגוריה
+    { width: 28 }, // H תת קטגוריה
     { width: 34 }, // I הערות
     { width: 14 }, // J סכום עסקה
     { width: 12 }, // K מטבע לחיוב
-    { width: 16 }, // L מספר כרטיס/בנק
+    { width: 16 }, // L מספר כרטיס / בנק
     { width: 4, hidden: true }, // M spacer
     { width: 20, hidden: true }, // N לממוצע חודשי (לשימוש פנימי)
     { width: 20, hidden: true }, // O מס' חודשים (לשימוש פנימי)
@@ -1164,7 +1164,7 @@ function appendExcelClassificationSheet(
   styleHeaderRow(sheet.getRow(8));
   // Two-line headers: keep the title at the header size but drop the parenthetical
   // default-value note to size 9 so it reads as a caption (Change #4).
-  applyHeaderSubtitle(sheet.getCell("E8"), "הוצאה/הכנסה", "\n(ברירת מחדל: הוצאה)");
+  applyHeaderSubtitle(sheet.getCell("E8"), "הוצאה / הכנסה", "\n(ברירת מחדל: הוצאה)");
   applyHeaderSubtitle(sheet.getCell("F8"), "מחזוריות", "\n(ברירת מחדל: חודשי/מזדמן)");
   // Two matching helper notes on the classification header cells, so the
   // "how do I pick a category?" explanation sits symmetrically above both the
@@ -1522,6 +1522,10 @@ async function appendBudgetTemplateSheets(workbook: ExcelJS.Workbook) {
 
     const destination = workbook.addWorksheet(name, { properties: source.properties, views: source.views });
     destination.model = { ...source.model, id: destination.id, name };
+    // Hide gridlines so the budget sheets read as a flat canvas, matching the
+    // rest of the report (client request). Applied after the model copy since
+    // that re-sets the template's own views.
+    destination.views = (destination.views ?? []).map((view) => ({ ...view, showGridLines: false }));
     (source.model.merges ?? []).forEach((range) => {
       try {
         destination.mergeCells(range);
@@ -1615,7 +1619,7 @@ function appendExcelResultSheet(
   monthCount: number,
 ) {
   const sheet = workbook.addWorksheet(resultSheetName, {
-    views: [{ rightToLeft: true }],
+    views: [{ rightToLeft: true, showGridLines: false }],
   });
   const expenseSubCategories = getExpenseSubCategories();
   const incomeSubCategories = getIncomeSubCategories();
@@ -1824,7 +1828,7 @@ function appendExcelResultSheet(
 
 function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
   const sheet = workbook.addWorksheet("רשימת קטגוריות", {
-    views: [{ rightToLeft: true }],
+    views: [{ rightToLeft: true, showGridLines: false }],
   });
   const rows = buildCategorySheetRows();
   sheet.addRows(rows);
