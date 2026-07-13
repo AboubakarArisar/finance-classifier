@@ -1056,6 +1056,18 @@ function appendExcelSummarySheet(workbook: ExcelJS.Workbook, summaries: ParsedSh
     { width: 14 },
   ];
   styleHeaderRow(sheet.getRow(2));
+  // Right-align the data body so the date columns (תאריך מאוחר / תאריך מוקדם) —
+  // stored as text, so they would otherwise fall back to left "general" alignment
+  // in the RTL view — line up with the numeric columns (client request).
+  // Presentation only; values and widths are untouched.
+  const summaryFirstDataRow = 3;
+  const summaryLastRow = summaries.length + 2;
+  for (let rowNumber = summaryFirstDataRow; rowNumber <= summaryLastRow; rowNumber += 1) {
+    for (let colNumber = 1; colNumber <= 7; colNumber += 1) {
+      const cell = sheet.getCell(rowNumber, colNumber);
+      cell.alignment = { ...cell.alignment, horizontal: "right" };
+    }
+  }
 }
 
 function appendExcelClassificationSheet(
@@ -1854,6 +1866,35 @@ function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
       cell.font = { bold: true, color: { argb: reportTheme.headerText } };
     }
   });
+  // Frame the catalog like the result-sheet tables (client reference): a medium
+  // outer rule around the data block, hair rules between the rows, and medium
+  // vertical dividers separating the three sections — expenses, income and
+  // לא לסיווג. Presentation only; no value, width or column order changes, so the
+  // CategorySubList named ranges are untouched.
+  const mSide = { color: { argb: "FF000000" }, style: "medium" as const };
+  const hair = { color: { argb: "FF000000" }, style: "hair" as const };
+  const totalCols = rows[0].length;
+  const firstDataRow = 2;
+  const lastDataRow = rows.length;
+  const incomeStartCol = 17; // categoryCatalog index 16 — first income group (matches the index < 16 split above)
+  const unclassifiedCol =
+    categoryCatalog.findIndex((group) => group.mainCategory === notForClassificationLabel) + 1;
+  const incomeEndCol = unclassifiedCol - 1; // last income group, just before לא לסיווג
+  for (let rowNumber = firstDataRow; rowNumber <= lastDataRow; rowNumber += 1) {
+    for (let colNumber = 1; colNumber <= totalCols; colNumber += 1) {
+      const border: Partial<ExcelJS.Borders> = {
+        top: rowNumber === firstDataRow ? mSide : hair,
+        bottom: rowNumber === lastDataRow ? mSide : hair,
+      };
+      if (colNumber === 1 || colNumber === incomeStartCol) {
+        border.left = mSide;
+      }
+      if (colNumber === incomeEndCol || colNumber === unclassifiedCol) {
+        border.right = mSide;
+      }
+      sheet.getCell(rowNumber, colNumber).border = border;
+    }
+  }
 }
 
 function appendExcelImportSheet(workbook: ExcelJS.Workbook, transactions: NormalizedTransaction[]) {
