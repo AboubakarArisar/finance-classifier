@@ -1476,7 +1476,7 @@ function layoutGraphSheetCharts(
     ...summary,
     // Centre the overview pie under the full-width banner (A→W, 0-based column
     // boundaries 0→23): a width-13 chart with equal 5-column margins each side.
-    anchor: { fromCol: 5, fromRow: 2, toCol: 18, toRow: 24 },
+    anchor: { fromCol: 5, fromRow: 2, toCol: 18, toRow: 25 },
   };
   const laidOut = perCategory.map((chart, index) => {
     const gridCol = index % gridColumns;
@@ -1652,16 +1652,26 @@ function appendExcelResultSheet(
   // Colour-code the section headings and bump them to size 12: expenses read
   // orange, income reads blue, the balance reads yellow — matching the reference.
   const headingFont = { bold: true, size: 12, color: { argb: reportTheme.headerText } };
+  // Row-3 sub-headers sit one size smaller than the row-1 totals so all three
+  // tables' sub-headers match (the summary table's G3/H3 already render at 11).
+  const subHeadingFont = { bold: true, size: 11, color: { argb: reportTheme.headerText } };
   const solidFill = (argb: string) => ({ fgColor: { argb }, pattern: "solid" as const, type: "pattern" as const });
-  (["A1", "A3", "B3"] as const).forEach((cellAddress) => {
-    sheet.getCell(cellAddress).font = headingFont;
+  sheet.getCell("A1").font = headingFont;
+  sheet.getCell("A1").fill = solidFill(reportTheme.expenseFill);
+  (["A3", "B3"] as const).forEach((cellAddress) => {
+    sheet.getCell(cellAddress).font = subHeadingFont;
     sheet.getCell(cellAddress).fill = solidFill(reportTheme.expenseFill);
   });
-  (["D1", "D3", "E3"] as const).forEach((cellAddress) => {
-    sheet.getCell(cellAddress).font = headingFont;
+  sheet.getCell("D1").font = headingFont;
+  sheet.getCell("D1").fill = solidFill(reportTheme.incomeFill);
+  (["D3", "E3"] as const).forEach((cellAddress) => {
+    sheet.getCell(cellAddress).font = subHeadingFont;
     sheet.getCell(cellAddress).fill = solidFill(reportTheme.incomeFill);
   });
   sheet.getCell("G1").font = headingFont; // "הפרש" keeps the teal header fill
+  // Stretch the row-1 banner a little taller than the default so the totals row
+  // reads as the dominant header across all three tables.
+  sheet.getRow(1).height = 24;
   // The three totals on row 1 get colour-matched "value chips": expenses red,
   // income blue, monthly balance yellow.
   const totalNumberFormat = '[$₪-40D]#,##0;[Red]-[$₪-40D]#,##0;[$₪-40D]-';
