@@ -1174,9 +1174,11 @@ function appendExcelClassificationSheet(
   ];
   sheet.autoFilter = `A8:P${lastRow}`;
   styleHeaderRow(sheet.getRow(8));
-  // Two-line headers: keep the title at the header size but drop the parenthetical
-  // default-value note to size 9 so it reads as a caption (Change #4).
-  applyHeaderSubtitle(sheet.getCell("E8"), "הוצאה / הכנסה", "\n(ברירת מחדל: הוצאה)");
+  // E header: plain single-line title, no "(ברירת מחדל: הוצאה)" subtitle (client
+  // asked to drop it). Keeps the header styling already applied by styleHeaderRow.
+  sheet.getCell("E8").value = "הוצאה / הכנסה";
+  // F header keeps its two-line form: title at header size, parenthetical note
+  // dropped to size 9 so it reads as a caption.
   applyHeaderSubtitle(sheet.getCell("F8"), "מחזוריות", "\n(ברירת מחדל: חודשי/מזדמן)");
   // Two matching helper notes on the classification header cells, so the
   // "how do I pick a category?" explanation sits symmetrically above both the
@@ -1226,17 +1228,36 @@ function appendExcelClassificationSheet(
   sheet.getCell("A6").font = { size: 11, color: { argb: reportTheme.alertText } };
   // Row 7 (data-source line) uses the teal title colour, matching the KPI labels.
   sheet.getCell("A7").font = { size: 11, color: { argb: reportTheme.titleText } };
-  // Teal box border around the five KPI value cells (B1:B5) so the family's summary
-  // reads as a bordered card, matching the client's reference (design change).
-  const kpiBorderSide = { color: { argb: reportTheme.titleText }, style: "medium" as const };
-  ["B1", "B2", "B3", "B4", "B5"].forEach((cellAddress) => {
-    sheet.getCell(cellAddress).border = {
-      bottom: kpiBorderSide,
-      left: kpiBorderSide,
-      right: kpiBorderSide,
-      top: kpiBorderSide,
-    };
+  // Each instruction line is merged into a single cell spanning A→G (as the
+  // client asked) and stays right-aligned. No borders — the reference shows the
+  // merged text with no box.
+  sheet.mergeCells("A6:G6");
+  sheet.mergeCells("A7:G7");
+  [6, 7].forEach((rowNumber) => {
+    sheet.getCell(rowNumber, 1).alignment = { horizontal: "right", vertical: "middle" };
   });
+  // KPI card borders per the client's reference:
+  //  • Column A (labels) carries the horizontal black rules — under rows 1, 2 and
+  //    4, and above+below row 5 — with NO rule between rows 3 and 4.
+  //  • Column B (values) is framed vertically: a solid black line on its visual
+  //    left, a dotted line on its visual right. This sheet is right-to-left (the
+  //    comment triangles sit at the top-left, confirming the mirror), so the
+  //    visual sides map to the opposite geometric sides: solid black on
+  //    border.right, dotted on border.left.
+  const blackSide = { color: { argb: "FF000000" }, style: "medium" as const };
+  const dottedSide = { color: { argb: "FF000000" }, style: "dotted" as const };
+  const aRowBorders: Record<number, Partial<ExcelJS.Borders>> = {
+    1: { bottom: blackSide },
+    2: { bottom: blackSide },
+    4: { bottom: blackSide },
+    5: { top: blackSide, bottom: blackSide },
+  };
+  Object.entries(aRowBorders).forEach(([rowNumber, border]) => {
+    sheet.getCell(Number(rowNumber), 1).border = border;
+  });
+  for (let rowNumber = 1; rowNumber <= 5; rowNumber += 1) {
+    sheet.getCell(rowNumber, 2).border = { left: dottedSide, right: blackSide, bottom: blackSide };
+  }
   // "תזרים פלוס" helper comment on each KPI value cell — clicking the cell explains
   // what to enter (name / months) or what the number means (avg expense/income/balance).
   ([
