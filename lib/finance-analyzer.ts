@@ -1567,13 +1567,48 @@ async function appendBudgetTemplateSheets(workbook: ExcelJS.Workbook) {
       }
     });
 
+    // Bold the sheet's own name where it appears inside the red row-2 blurb
+    // (e.g. "מטרת <b>תקציב בקרה</b> הינו…"), keeping the rest of the sentence in
+    // the same red caption font — client request across all three budget sheets.
+    boldBudgetNameInIntro(destination.getCell("A2"), name);
+
     // The balance-budget sheet (first template sheet) auto-fills its שיקוף columns
     // from the reflection so the family sees their real monthly figures without
     // retyping them — matching the client's reference file.
     if (name === budgetTemplateSheetNames[0]) {
       wireBalanceBudgetReflection(destination);
     }
+
+    // The control-budget sheet (second template) ships with a stray yellow band
+    // on row 5; the client wants that spacer row left colourless.
+    if (name === budgetTemplateSheetNames[1]) {
+      for (let colNumber = 1; colNumber <= 8; colNumber += 1) {
+        destination.getCell(5, colNumber).fill = { type: "pattern", pattern: "none" };
+      }
+    }
   }
+}
+
+// Bold the budget sheet's name inside its red row-2 intro sentence. The template
+// stores that intro as a single plain string with a uniform red caption font; we
+// re-emit it as rich text with three runs (before / the bold name / after) so only
+// the name reads bold while the caption's colour, font and size are preserved.
+function boldBudgetNameInIntro(cell: ExcelJS.Cell, sheetName: string) {
+  const text = typeof cell.value === "string" ? cell.value : undefined;
+  if (!text) {
+    return;
+  }
+  const start = text.indexOf(sheetName);
+  if (start === -1) {
+    return;
+  }
+  const baseFont = { ...(cell.font ?? {}) };
+  const runs = [
+    { text: text.slice(0, start), font: baseFont },
+    { text: sheetName, font: { ...baseFont, bold: true } },
+    { text: text.slice(start + sheetName.length), font: baseFont },
+  ].filter((run) => run.text.length > 0);
+  cell.value = { richText: runs };
 }
 
 // Wire the "תקציב איזון" שיקוף (reflection) columns to the result sheet so each
@@ -1862,7 +1897,9 @@ function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
   // לא לסיווג. Presentation only; no value, width or column order changes, so the
   // CategorySubList named ranges are untouched.
   const mSide = { color: { argb: "FF000000" }, style: "medium" as const };
-  const hair = { color: { argb: "FF000000" }, style: "hair" as const };
+  // Interior row separators render as dotted lines; the client wants them a soft
+  // grey rather than black so the ledger rules read lighter than the outer frame.
+  const hair = { color: { argb: "FFA6A6A6" }, style: "hair" as const };
   const totalCols = rows[0].length;
   const firstDataRow = 2;
   const lastDataRow = rows.length;
@@ -1882,7 +1919,13 @@ function appendExcelCategorySheet(workbook: ExcelJS.Workbook) {
       if (colNumber === incomeEndCol || colNumber === unclassifiedCol) {
         border.right = mSide;
       }
-      sheet.getCell(rowNumber, colNumber).border = border;
+      const cell = sheet.getCell(rowNumber, colNumber);
+      cell.border = border;
+      // Zebra-band the ledger: shade even rows (2, 4, 6…) with the soft slate
+      // fill so alternating rows read apart, matching the result-sheet tables.
+      if (rowNumber % 2 === 0) {
+        cell.fill = { fgColor: { argb: reportTheme.bandFill }, pattern: "solid", type: "pattern" };
+      }
     }
   }
   // Header row (1) joins the same frame: medium top/bottom, thin separators
