@@ -431,6 +431,12 @@ export default function Home() {
 
             {/* Terms acceptance — must be checked before processing */}
             <label className="flex items-center justify-start gap-2 text-sm text-text-muted">
+              <input
+                type="checkbox"
+                checked={acceptedTerms}
+                onChange={(event) => setAcceptedTerms(event.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
               <span>
                 אני מאשר את{" "}
                 <a
@@ -442,12 +448,6 @@ export default function Home() {
                   הסכם שימוש ופרטיות
                 </a>
               </span>
-              <input
-                type="checkbox"
-                checked={acceptedTerms}
-                onChange={(event) => setAcceptedTerms(event.target.checked)}
-                className="h-4 w-4 accent-primary"
-              />
             </label>
 
             {/* Footer actions */}
