@@ -116,11 +116,15 @@ export default function Home() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [inputVersion, setInputVersion] = useState(0);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   // Detected statement type per file (keyed by fileKey). "unknown" = detection ran but found nothing.
   const [kinds, setKinds] = useState<Record<string, FileKind | "unknown">>({});
   const detectingRef = useRef<Set<string>>(new Set());
 
-  const canSubmit = useMemo(() => files.length > 0 && !isSubmitting, [files, isSubmitting]);
+  const canSubmit = useMemo(
+    () => files.length > 0 && !isSubmitting && acceptedTerms,
+    [files, isSubmitting, acceptedTerms],
+  );
 
   // Detect the real statement type for any newly added file, in the background.
   useEffect(() => {
@@ -424,6 +428,27 @@ export default function Home() {
                 </div>
               </div>
             ) : null}
+
+            {/* Terms acceptance — must be checked before processing */}
+            <label className="flex items-center justify-end gap-2 text-sm text-text-muted">
+              <span>
+                אני מאשר את{" "}
+                <a
+                  href="https://bennyvazana.com/wp-content/uploads/2026/07/tazrim-plus.pdf"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-semibold text-primary underline hover:text-primary-hover"
+                >
+                  הסכם שימוש ופרטיות
+                </a>
+              </span>
+              <input
+                type="checkbox"
+                checked={acceptedTerms}
+                onChange={(event) => setAcceptedTerms(event.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+            </label>
 
             {/* Footer actions */}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-5 md:flex-nowrap">

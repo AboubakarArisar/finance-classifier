@@ -1236,27 +1236,22 @@ function appendExcelClassificationSheet(
   [6, 7].forEach((rowNumber) => {
     sheet.getCell(rowNumber, 1).alignment = { horizontal: "right", vertical: "middle" };
   });
-  // KPI card borders per the client's reference:
-  //  • Column A (labels) carries the horizontal black rules — under rows 1, 2 and
-  //    4, and above+below row 5 — with NO rule between rows 3 and 4.
-  //  • Column B (values) is framed vertically: a solid black line on its visual
-  //    left, a dotted line on its visual right. This sheet is right-to-left (the
-  //    comment triangles sit at the top-left, confirming the mirror), so the
-  //    visual sides map to the opposite geometric sides: solid black on
-  //    border.right, dotted on border.left.
-  const blackSide = { color: { argb: "FF000000" }, style: "medium" as const };
+  // KPI card borders per the client's reference — all thin (no thick rules), no
+  // top rule anywhere:
+  //  • Horizontal rules under rows 1, 2 and 4 only. Row 4's rule separates the
+  //    income/expense pair (rows 3-4) from the balance row (5); there is NO rule
+  //    between expenses (3) and income (4). The card closes with a thin dashed
+  //    line under row 5.
+  //  • Column B (values) keeps a thin vertical frame: dotted on border.left,
+  //    solid on border.right (RTL mirror — comment triangles sit top-left).
+  const thin = { color: { argb: "FF000000" }, style: "thin" as const };
+  const dashed = { color: { argb: "FF000000" }, style: "dashed" as const };
   const dottedSide = { color: { argb: "FF000000" }, style: "dotted" as const };
-  const aRowBorders: Record<number, Partial<ExcelJS.Borders>> = {
-    1: { bottom: blackSide },
-    2: { bottom: blackSide },
-    4: { bottom: blackSide },
-    5: { top: blackSide, bottom: blackSide },
-  };
-  Object.entries(aRowBorders).forEach(([rowNumber, border]) => {
-    sheet.getCell(Number(rowNumber), 1).border = border;
-  });
+  const rowBottom: Record<number, ExcelJS.Border> = { 1: thin, 2: thin, 4: thin, 5: dashed };
   for (let rowNumber = 1; rowNumber <= 5; rowNumber += 1) {
-    sheet.getCell(rowNumber, 2).border = { left: dottedSide, right: blackSide, bottom: blackSide };
+    const bottom = rowBottom[rowNumber];
+    sheet.getCell(rowNumber, 1).border = bottom ? { bottom } : {};
+    sheet.getCell(rowNumber, 2).border = { left: dottedSide, right: thin, ...(bottom ? { bottom } : {}) };
   }
   // "תזרים פלוס" helper comment on each KPI value cell — clicking the cell explains
   // what to enter (name / months) or what the number means (avg expense/income/balance).
