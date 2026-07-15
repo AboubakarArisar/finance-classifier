@@ -1187,8 +1187,8 @@ function appendExcelClassificationSheet(
   // is touched.
   const classificationHelperNote = (title: string, body: string): ExcelJS.Comment => ({
     texts: [
-      { font: { bold: true, size: 9, color: { argb: reportTheme.titleText } }, text: `${title}\n` },
-      { font: { size: 9, color: { argb: reportTheme.noteText } }, text: body },
+      { font: { bold: true, underline: true, size: 8, color: { argb: reportTheme.titleText } }, text: `${title}\n` },
+      { font: { size: 8, color: { argb: reportTheme.noteText } }, text: body },
     ],
     margins: { insetmode: "custom", inset: [0.13, 0.13, 0.13, 0.13] },
     protection: { locked: "True", lockText: "True" },
@@ -1240,14 +1240,13 @@ function appendExcelClassificationSheet(
   // top rule anywhere:
   //  • Horizontal rules under rows 1, 2 and 4 only. Row 4's rule separates the
   //    income/expense pair (rows 3-4) from the balance row (5); there is NO rule
-  //    between expenses (3) and income (4). The card closes with a thin dashed
+  //    between expenses (3) and income (4). The card closes with a thin solid
   //    line under row 5.
   //  • Column B (values) keeps a thin vertical frame: dotted on border.left,
   //    solid on border.right (RTL mirror — comment triangles sit top-left).
   const thin = { color: { argb: "FF000000" }, style: "thin" as const };
-  const dashed = { color: { argb: "FF000000" }, style: "dashed" as const };
   const dottedSide = { color: { argb: "FF000000" }, style: "dotted" as const };
-  const rowBottom: Record<number, ExcelJS.Border> = { 1: thin, 2: thin, 4: thin, 5: dashed };
+  const rowBottom: Record<number, ExcelJS.Border> = { 1: thin, 2: thin, 4: thin, 5: thin };
   for (let rowNumber = 1; rowNumber <= 5; rowNumber += 1) {
     const bottom = rowBottom[rowNumber];
     sheet.getCell(rowNumber, 1).border = bottom ? { bottom } : {};

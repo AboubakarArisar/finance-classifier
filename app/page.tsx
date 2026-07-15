@@ -430,7 +430,7 @@ export default function Home() {
             ) : null}
 
             {/* Terms acceptance — must be checked before processing */}
-            <label className="flex items-center justify-end gap-2 text-sm text-text-muted">
+            <label className="flex items-center justify-start gap-2 text-sm text-text-muted">
               <span>
                 אני מאשר את{" "}
                 <a

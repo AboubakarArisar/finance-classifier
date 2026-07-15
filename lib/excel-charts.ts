@@ -338,7 +338,11 @@ export async function shrinkKpiCommentBoxes(buffer: Buffer): Promise<Buffer> {
   let changed = false;
   for (const file of vmlFiles) {
     const vml = await file.async("string");
-    const next = vml.replace(/<v:shape\b[\s\S]*?<\/v:shape>/g, (shape) => {
+    // Every comment div is hard-coded to text-align:left by ExcelJS, so the Hebrew
+    // notes read left-to-right ("english style"). Flip them all to RTL so the text
+    // hugs the right edge like the reference file.
+    let next = vml.replace(/text-align:left/g, "text-align:right;direction:rtl");
+    next = next.replace(/<v:shape\b[\s\S]*?<\/v:shape>/g, (shape) => {
       // The KPI value cells are the only comments in column B (0-based index 1);
       // G8/H8 helper notes live in columns 6/7 and are intentionally left alone.
       if (!/<x:Column>1<\/x:Column>/.test(shape)) {
@@ -350,8 +354,10 @@ export async function shrinkKpiCommentBoxes(buffer: Buffer): Promise<Buffer> {
         if (parts.length !== 8) {
           return whole;
         }
-        parts[4] = "3"; // right column: span one column (C) instead of C+D
-        parts[6] = String(Number(parts[6]) + 1); // +1 row so long notes never clip
+        // Compact box: two columns wide and four rows tall, snug like the
+        // reference instead of the tall, narrow default that leaves empty space.
+        parts[4] = String(Number(parts[0]) + 2);
+        parts[6] = String(Number(parts[2]) + 4);
         return `<x:Anchor>${parts.join(", ")}</x:Anchor>`;
       });
     });
